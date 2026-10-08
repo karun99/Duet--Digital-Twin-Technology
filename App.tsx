@@ -2,10 +2,21 @@
 import React, { useState } from 'react';
 import { Onboarding } from './components/Onboarding';
 import { Simulation } from './components/Simulation';
+import { OpenRouterGate } from './components/OpenRouterGate';
+import { getStoredApiKey, clearApiKey } from './services/openrouter';
 import { UserProfile } from './types';
 
 function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [linked, setLinked] = useState<boolean>(() => !!getStoredApiKey() || !!process.env.API_KEY);
+  const [hasUserKey, setHasUserKey] = useState<boolean>(() => !!getStoredApiKey());
+
+  const handleForgetKey = () => {
+    clearApiKey();
+    setHasUserKey(false);
+    setUserProfile(null);
+    setLinked(false);
+  };
 
   return (
     <div className="fixed inset-0 bg-black text-white overflow-hidden flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
@@ -18,6 +29,10 @@ function App() {
         <div className="absolute inset-0 opacity-[0.02]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '100px 100px' }}></div>
       </div>
 
+      {!linked && <OpenRouterGate onReady={() => setLinked(true)} />}
+
+      {linked && (
+      <>
       {/* Header (Desktop Only / Hide when simulation is on mobile if needed) */}
       {!userProfile && (
         <header className="relative z-50 h-20 px-8 md:px-12 flex justify-between items-center border-b border-white/[0.03] backdrop-blur-3xl shrink-0 bg-black/20">
@@ -44,6 +59,15 @@ function App() {
                     <span className="text-[10px] font-bold text-white uppercase tracking-tighter">Secure_Link</span>
                 </div>
             </div>
+            {hasUserKey && (
+              <button
+                onClick={handleForgetKey}
+                className="text-[10px] font-mono uppercase tracking-[0.25em] text-neutral-500 hover:text-cyan-400 border border-white/10 hover:border-cyan-500/40 px-5 py-2.5 rounded-full transition-all"
+                title="Sign out and use a different OpenRouter key"
+              >
+                Change_Key
+              </button>
+            )}
           </div>
         </header>
       )}
@@ -63,6 +87,8 @@ function App() {
           />
         )}
       </main>
+      </>
+      )}
 
       <style>{`
         @keyframes pulse-slow {

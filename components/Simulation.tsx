@@ -356,6 +356,10 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack }) =
   };
 
   const startLiveSession = async () => {
+    if (!process.env.API_KEY) {
+      alert('Neural Voice Link needs a Gemini host key on this deployment. Text link runs on OpenRouter free models.');
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });

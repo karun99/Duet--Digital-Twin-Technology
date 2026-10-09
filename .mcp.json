@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "duet:-agentic-ai-&-parallel-consciousness": {
+      "command": "node",
+      "args": [
+        "mcp-server/server.mjs"
+      ]
+    }
+  }
+}

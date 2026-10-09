@@ -1,0 +1,21 @@
+{
+  "app": {
+    "name": "duet:-agentic-ai-&-parallel-consciousness",
+    "version": "0.0.0",
+    "description": "Duet \u2014 Digital Twin Technology. Your AI twin in a browser. Runs free on OpenRouter, private by design."
+  },
+  "stack": "node",
+  "routes": [],
+  "pages": [],
+  "base_url": "http://localhost:3000",
+  "module": null,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "server": "mcp-server/server.mjs",
+  "runner": "node",
+  "runner_cmd": "node"
+}

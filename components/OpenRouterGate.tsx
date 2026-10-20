@@ -41,20 +41,20 @@ export const OpenRouterGate: React.FC<OpenRouterGateProps> = ({ onReady }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-[#050505] p-6 overflow-y-auto">
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-[#050505] p-4 sm:p-6 overflow-y-auto safe-top safe-bottom">
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-[-15%] left-[-10%] w-[50vw] h-[50vw] bg-cyan-900/10 rounded-full blur-[160px] animate-pulse-slow"></div>
         <div className="absolute bottom-[-15%] right-[-10%] w-[60vw] h-[60vw] bg-purple-900/10 rounded-full blur-[160px]"></div>
       </div>
 
-      <div className="relative w-full max-w-xl glass-panel rounded-[3rem] border-t border-cyan-900 p-10 md:p-16 shadow-[0_0_150px_rgba(34,211,238,0.08)] animate-fade-in">
+      <div className="relative w-full max-w-xl glass-panel rounded-[2.5rem] sm:rounded-[3rem] border-t border-cyan-900 p-6 sm:p-10 md:p-16 shadow-[0_0_150px_rgba(34,211,238,0.08)] animate-fade-in my-4">
         <div className="mb-12 text-center">
           <div className="inline-block p-5 rounded-2xl bg-cyan-950/30 mb-8 border border-cyan-800 shadow-[0_0_30px_rgba(34,211,238,0.15)]">
             <svg className="w-10 h-10 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.029 5.912l-2.625 1.458a1 1 0 01-.954-.108l-.6-.48V15a1 1 0 01-1-1h-4a1 1 0 01-1-1v-.875l-.6.48a1 1 0 01-.954.108L5.03 12.912A6 6 0 0112 7h0a6 6 0 016 6z" />
             </svg>
           </div>
-          <h2 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-white to-purple-500 mb-6 tracking-tighter uppercase leading-tight">
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-white to-purple-500 mb-5 sm:mb-6 tracking-tighter uppercase leading-tight">
             OpenRouter Link
           </h2>
           <p className="text-neutral-400 max-w-md mx-auto text-sm leading-relaxed font-light opacity-80">
@@ -97,7 +97,7 @@ export const OpenRouterGate: React.FC<OpenRouterGateProps> = ({ onReady }) => {
           <button
             type="submit"
             disabled={isVerifying}
-            className="w-full py-6 bg-gradient-to-br from-cyan-600 to-purple-700 hover:from-cyan-500 hover:to-purple-600 disabled:opacity-30 text-white rounded-[2.5rem] font-bold text-xs tracking-[0.4em] uppercase transition-all shadow-[0_0_50px_rgba(34,211,238,0.2)] active:scale-[0.98] flex items-center justify-center gap-4"
+            className="w-full py-5 sm:py-6 bg-gradient-to-br from-cyan-600 to-purple-700 hover:from-cyan-500 hover:to-purple-600 disabled:opacity-30 text-white rounded-[2rem] sm:rounded-[2.5rem] font-bold text-xs tracking-[0.3em] sm:tracking-[0.4em] uppercase transition-all shadow-[0_0_50px_rgba(34,211,238,0.2)] active:scale-[0.98] flex items-center justify-center gap-4"
           >
             {isVerifying ? (
               <>

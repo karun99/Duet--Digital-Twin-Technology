@@ -65,12 +65,12 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   };
 
   return (
-    <div className="max-w-3xl mx-auto w-full p-8 md:p-14 glass-panel rounded-[3.5rem] border-t border-cyan-900 shadow-2xl animate-fade-in-up">
+    <div className="max-w-3xl mx-auto w-full p-5 sm:p-8 md:p-14 glass-panel rounded-[2.5rem] sm:rounded-[3.5rem] border-t border-cyan-900 shadow-2xl animate-fade-in-up my-4">
       <div className="mb-10 md:mb-14 text-center">
         <div className="inline-block p-5 md:p-6 rounded-[2rem] bg-cyan-950/30 mb-8 border border-cyan-800 shadow-[0_0_30px_rgba(34,211,238,0.15)]">
              <svg className="w-12 h-12 md:w-16 md:h-16 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
         </div>
-        <h2 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-white to-purple-500 mb-6 tracking-tighter uppercase leading-tight">
+        <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-white to-purple-500 mb-5 sm:mb-6 tracking-tighter uppercase leading-tight px-2">
           Initialize Perception
         </h2>
         <p className="text-neutral-400 max-w-md mx-auto text-sm md:text-base leading-relaxed font-light opacity-80">
@@ -78,10 +78,10 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         </p>
       </div>
 
-      <div className="flex gap-3 md:gap-5 mb-12 justify-center">
+      <div className="flex gap-3 md:gap-5 mb-10 sm:mb-12 justify-center">
         <button
           onClick={() => setMode('manual')}
-          className={`px-8 md:px-10 py-4 rounded-2xl text-[11px] font-mono uppercase tracking-[0.3em] transition-all active:scale-95 ${
+          className={`px-6 sm:px-8 md:px-10 py-3.5 sm:py-4 rounded-2xl text-[10px] sm:text-[11px] font-mono uppercase tracking-[0.2em] sm:tracking-[0.3em] transition-all active:scale-95 ${
             mode === 'manual' 
               ? 'bg-cyan-500 text-black font-bold shadow-xl shadow-cyan-500/30' 
               : 'text-neutral-600 hover:text-neutral-300 bg-white/5 border border-white/5'
@@ -91,7 +91,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         </button>
         <button
           onClick={() => setMode('search')}
-          className={`px-8 md:px-10 py-4 rounded-2xl text-[11px] font-mono uppercase tracking-[0.3em] transition-all active:scale-95 ${
+          className={`px-6 sm:px-8 md:px-10 py-3.5 sm:py-4 rounded-2xl text-[10px] sm:text-[11px] font-mono uppercase tracking-[0.2em] sm:tracking-[0.3em] transition-all active:scale-95 ${
             mode === 'search' 
               ? 'bg-purple-600 text-white font-bold shadow-xl shadow-purple-500/30 border border-purple-500/50' 
               : 'text-neutral-600 hover:text-neutral-300 bg-white/5 border border-white/5'

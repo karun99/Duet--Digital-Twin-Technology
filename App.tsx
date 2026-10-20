@@ -35,19 +35,19 @@ function App() {
       <>
       {/* Header (Desktop Only / Hide when simulation is on mobile if needed) */}
       {!userProfile && (
-        <header className="relative z-50 h-20 px-8 md:px-12 flex justify-between items-center border-b border-white/[0.03] backdrop-blur-3xl shrink-0 bg-black/20">
-          <div className="flex items-center gap-5 group cursor-default">
-            <div className="w-10 h-10 bg-gradient-to-br from-cyan-400 to-purple-600 rounded-xl flex items-center justify-center shadow-2xl shadow-cyan-500/30 group-hover:scale-110 transition-transform duration-500">
-              <span className="text-black font-black text-lg">D</span>
+        <header className="relative z-50 h-16 sm:h-20 safe-top px-4 sm:px-8 md:px-12 flex justify-between items-center border-b border-white/[0.03] backdrop-blur-3xl shrink-0 bg-black/20">
+          <div className="flex items-center gap-3 sm:gap-5 group cursor-default min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 bg-gradient-to-br from-cyan-400 to-purple-600 rounded-xl flex items-center justify-center shadow-2xl shadow-cyan-500/30 group-hover:scale-110 transition-transform duration-500">
+              <span className="text-black font-black text-base sm:text-lg">D</span>
             </div>
-            <div className="flex flex-col">
-                <h1 className="text-lg font-bold tracking-tight uppercase leading-none">
-                  DUET <span className="text-neutral-600 font-light ml-2">SYSTEM</span>
+            <div className="flex flex-col min-w-0">
+                <h1 className="text-base sm:text-lg font-bold tracking-tight uppercase leading-none truncate">
+                  DUET <span className="text-neutral-600 font-light ml-1 sm:ml-2">SYSTEM</span>
                 </h1>
-                <span className="text-[8px] font-mono text-cyan-500/40 tracking-[0.5em] mt-1 uppercase">Parallel_Consciousness_Framework</span>
+                <span className="text-[8px] font-mono text-cyan-500/40 tracking-[0.25em] sm:tracking-[0.5em] mt-1 uppercase truncate">Parallel_Consciousness_Framework</span>
             </div>
           </div>
-          <div className="flex items-center gap-8">
+          <div className="flex items-center gap-4 sm:gap-8 shrink-0">
             <div className="hidden lg:flex items-center gap-6">
                 <div className="flex flex-col items-end">
                     <span className="text-[9px] font-mono text-cyan-500/60 uppercase tracking-widest">Global_Status</span>

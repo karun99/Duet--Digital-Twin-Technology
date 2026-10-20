@@ -3,8 +3,40 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Duet: Agentic AI & Parallel Consciousness</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#050505" />
+    <meta name="color-scheme" content="dark" />
+    <title>Duet: Agentic AI &amp; Parallel Consciousness</title>
+    <meta name="description" content="Duet is a digital-twin web app: it builds a high-fidelity simulation of a person's ideology and worldview, then talks to you as that parallel consciousness. Runs on OpenRouter free models — your key stays in your browser." />
+    <meta name="author" content="Sai Karun Nandipati" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://duet-digital-twin-technology.vercel.app/" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Duet — Digital Twin Technology" />
+    <meta property="og:title" content="Duet: Agentic AI &amp; Parallel Consciousness" />
+    <meta property="og:description" content="A digital-twin web app that simulates a person's ideology and worldview, then converses with you as that parallel consciousness. Free models via OpenRouter; your key never leaves your browser." />
+    <meta property="og:url" content="https://duet-digital-twin-technology.vercel.app/" />
+    <meta property="og:image" content="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Duet: Agentic AI &amp; Parallel Consciousness" />
+    <meta name="twitter:description" content="Digital-twin web app: converse with a simulated parallel consciousness. Runs on OpenRouter free models." />
+    <meta name="twitter:image" content="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Duet — Digital Twin Technology",
+      "alternateName": "Duet: Agentic AI & Parallel Consciousness",
+      "url": "https://duet-digital-twin-technology.vercel.app/",
+      "applicationCategory": "CommunicationApplication",
+      "operatingSystem": "Web",
+      "description": "A digital-twin web app that builds a high-fidelity simulation of a person's ideology and worldview, then talks to you as that parallel consciousness (PRIMARY → META → RESPONSE). Runs on OpenRouter free models; the user's API key is stored only in the browser.",
+      "author": { "@type": "Person", "name": "Sai Karun Nandipati", "url": "https://karun99.github.io" },
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "isAccessibleForFree": true
+    }
+    </script>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
@@ -12,7 +44,12 @@
         font-family: 'Inter', sans-serif;
         background-color: #050505;
         color: #e5e5e5;
+        color-scheme: dark;
+        -webkit-tap-highlight-color: transparent;
       }
+      /* iOS/Android safe areas (notch + home indicator) */
+      .safe-top { padding-top: env(safe-area-inset-top); }
+      .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
       h1, h2, h3, h4, h5, h6 {
         font-family: 'Space Grotesk', sans-serif;
       }

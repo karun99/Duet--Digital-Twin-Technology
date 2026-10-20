@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://duet-digital-twin-technology.vercel.app/sitemap.xml

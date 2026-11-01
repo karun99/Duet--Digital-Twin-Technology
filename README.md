@@ -18,6 +18,25 @@ available.
 > Duet started as a shared first project. The memory of building it is part of
 > what it is.
 
+## Paper
+
+The system is described in *Duet: Agentic AI and the Construction of Parallel
+Consciousness* (Sai Karun Nandipati, 2026).
+
+- DOI: [10.5281/zenodo.23831022](https://doi.org/10.5281/zenodo.23831022)
+- Mirror: [huggingface.co/datasets/saikarun/duet-paper](https://huggingface.co/datasets/saikarun/duet-paper)
+
+```bibtex
+@article{nandipati2026duet,
+  title     = {Duet: Agentic AI and the Construction of Parallel Consciousness},
+  author    = {Nandipati, Sai Karun},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.23831022},
+  url       = {https://doi.org/10.5281/zenodo.23831022}
+}
+```
+
 ---
 
 ## Bring any model

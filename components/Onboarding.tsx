@@ -4,7 +4,7 @@ import { analyzeIdentity, generateAvatar, searchUserBio } from '../services/duet
 import { PROVIDERS, useLlmConfig } from '../services/llm';
 import { ACCENT_CLASSES } from '../services/llm/providers';
 import { Button, Field, Spinner, inputClass } from './ui';
-import { IconArrowLeft, IconGlobe, IconSearch, IconShield, IconSpark, IconWarn } from './icons';
+import { IconArrowLeft, IconFile, IconGlobe, IconSearch, IconShield, IconSpark, IconWarn } from './icons';
 
 interface OnboardingProps {
   onComplete: (profile: UserProfile) => void;
@@ -342,6 +342,15 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete, onOpenSettin
         <span className="inline-flex items-center gap-1.5">
           <IconGlobe size={11} /> {meta.short.toLowerCase()} · {config.model.split('/').pop()}
         </span>
+        <a
+          href="https://doi.org/10.5281/zenodo.23831022"
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1.5 transition-colors hover:text-cyan-400"
+          title="Duet: Agentic AI and the Construction of Parallel Consciousness"
+        >
+          <IconFile size={11} /> paper · doi
+        </a>
       </div>
     </div>
   );

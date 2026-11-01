@@ -1,60 +1,130 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Duet — Digital Twin Technology
 
-# Duet — Agentic AI & Parallel Consciousness
+Duet builds a high-fidelity simulation of a person's ideology, worldview and
+perception, then talks to you as that parallel consciousness.
 
-A digital-twin application: it builds a high-fidelity simulation of a person's
-ideology, worldview, and perception, then talks to you as that parallel
-consciousness (`[[PRIMARY]] → [[META]] → [[RESPONSE]]`, with optional
-`[[SKETCH]]` visualizations).
+Every reply is structured the same way:
 
-## Sign in: OpenRouter, free models only
+```
+[[PRIMARY]]  the immediate, executive reaction
+[[META]]     why this persona reads the world that way
+[[RESPONSE]] the spoken answer, in character
+```
 
-The app needs **no environment variable** to work:
+You watch all three streams form live, and can re-open the reasoning of any past
+turn. Optional `[[SKETCH]]` blocks become diagrams when an image model is
+available.
 
-1. Create a free API key at [openrouter.ai/keys](https://openrouter.ai/keys).
-2. Paste it on the **OpenRouter Link** screen. The key is stored only in your
-   browser (localStorage) and sent only to `openrouter.ai`.
-3. Chat. Every reply is routed through OpenRouter's **free model router**
-   (`openrouter/free`), which picks a free model per request.
+> Duet started as a shared first project. The memory of building it is part of
+> what it is.
 
-If a free model is rate-limited or unavailable, the router automatically
-rotates to the next free model — there is no paid fallback by design. Use
-**Change_Key** in the header to sign out or switch keys.
+---
 
-### Optional host key
+## Bring any model
 
-`GEMINI_API_KEY` (see [.env.example](.env.example)) is optional. When the
-deployment ships one, it keeps search-grounded bio lookup, AI avatars/sketches,
-and Neural Voice Link available at no cost to the user. Without it:
+There is no server and no account. You paste one key, it stays in your browser,
+and it is sent only to the provider you picked.
 
-- bio search and link analysis run through the free OpenRouter text path
-- links are read via a public reader, then summarized
-- avatars and sketches are generated procedurally in-browser (blueprint style)
-- Neural Voice Link is disabled with a clear message
+| Provider | Endpoint | Default model | Free option |
+| --- | --- | --- | --- |
+| **OpenRouter** | `openrouter.ai/api/v1` | `openrouter/free` | Yes — free router rotates models |
+| **Google Gemini** | `generativelanguage.googleapis.com/v1beta` | `gemini-2.5-flash` | Yes — AI Studio free tier |
+| **NVIDIA NIM** | `integrate.api.nvidia.com/v1` | `meta/llama-3.3-70b-instruct` | Free developer credits |
+| **Custom** | any OpenAI-compatible URL | you choose | whatever your endpoint allows |
 
-## Jātaka Guardrails
+"Custom" covers Groq, Together, DeepSeek, Mistral, Ollama, LM Studio, vLLM,
+OpenAI itself — anything that speaks `POST /chat/completions`.
 
-The clone's system prompt carries the twelve Jātaka Guardrails of the Jijñāsā
-system in **Presence** mode: held silently, never invoked. **Invocation**
-happens only after the person says "I'm stuck" twice in the same thread —
-exactly one precedent, its anchor line once, nothing else.
+### What each provider unlocks
 
-- Registry: [.jijnasa/guardrails.md](.jijnasa/guardrails.md)
-- Invocation log: [.jijnasa/guardrail-log.md](.jijnasa/guardrail-log.md)
-- Prompt copy: `constants.ts` → `JATAKA_GUARDRAIL_BLOCK`
+| Feature | OpenRouter | Gemini | NVIDIA | Custom |
+| --- | --- | --- | --- | --- |
+| Streaming chat | ✅ | ✅ | ✅ | ✅ |
+| Model browser with search | ✅ | ✅ | ✅ | ✅ when `/models` exists |
+| Image attachments (vision) | ✅ | ✅ | ✅ | model dependent |
+| Search-grounded persona lookup | – | ✅ | – | – |
+| AI avatar / sketch images | – | ✅ | – | – |
+| Live voice link | – | ✅ (AI Studio key) | – | – |
 
-## Run locally
+Without an image model, avatars and sketches are generated procedurally in the
+browser, so nothing is ever a dead end.
+
+### Optional host keys
+
+A deployment can offer a provider to visitors at its own cost. Set any of
+`GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY` (see
+[.env.example](.env.example)); a **Use deployment key** button then appears on
+the connect screen. Nothing is required for the app to run.
+
+---
+
+## Run it
 
 ```bash
 npm install
 npm run dev        # http://localhost:3000
 ```
 
-## Verify
+Verify before shipping:
 
 ```bash
 npm run typecheck  # tsc --noEmit
 npm run build      # typecheck + vite build → dist/
 ```
+
+Deploy to Vercel (or any static host) with `npm run build` and `dist/` as the
+output directory — `vercel.json` is already configured.
+
+---
+
+## How it works
+
+```
+index.tsx → App.tsx
+             ├── ProviderGate   connect / settings (any provider)
+             ├── Onboarding     persona construction
+             └── Simulation     the duet itself
+```
+
+```
+services/
+  llm/
+    providers.ts   provider registry: endpoints, key hints, accents
+    config.ts      localStorage config, host keys, reactive store
+    client.ts      transport: SSE streaming, vision, model listing, validation
+  duet.ts          persona lookup, link ingestion, avatars, clone chat
+  session.ts       local session persistence + markdown export
+```
+
+Design decisions worth knowing:
+
+- **One transport interface.** OpenAI-compatible providers share one path;
+  Gemini has its own adapter. Adding a provider is a few lines in
+  `providers.ts`, not a new code path.
+- **Streaming everywhere.** `chat()` streams through `onDelta`; the UI parses
+  the `[[PRIMARY]] → [[META]] → [[RESPONSE]]` tags incrementally so you see the
+  duet think instead of watching a spinner.
+- **Real resilience.** OpenRouter retries across free models on 402/429/404.
+  Every provider surfaces typed errors (`LlmError`) with a retry path instead of
+  failing silently.
+- **Local by default.** Keys, persona and conversation live in `localStorage`.
+  The only outbound calls are to your provider (and `r.jina.ai` if you paste a
+  link to read).
+- **Compiled CSS.** Tailwind is built at compile time — no CDN, no runtime
+  style generation.
+
+---
+
+## Keyboard
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Send |
+| `Shift + Enter` | New line |
+| `Esc` | Close the open modal |
+
+---
+
+## License
+
+Personal project by [Sai Karun Nandipati](https://karun99.github.io).

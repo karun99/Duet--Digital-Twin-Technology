@@ -1,176 +1,348 @@
-
 import React, { useState } from 'react';
-import { UserProfile, GroundingSource } from '../types';
-import { searchUserBio, analyzeIdentity, generateAvatar } from '../services/geminiService';
+import { GroundingSource, UserProfile } from '../types';
+import { analyzeIdentity, generateAvatar, searchUserBio } from '../services/duet';
+import { PROVIDERS, useLlmConfig } from '../services/llm';
+import { ACCENT_CLASSES } from '../services/llm/providers';
+import { Button, Field, Spinner, inputClass } from './ui';
+import { IconArrowLeft, IconGlobe, IconSearch, IconShield, IconSpark, IconWarn } from './icons';
 
 interface OnboardingProps {
   onComplete: (profile: UserProfile) => void;
+  onOpenSettings?: () => void;
 }
 
-export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
-  const [mode, setMode] = useState<'manual' | 'search'>('manual');
+type Mode = 'manual' | 'search';
+
+const EXAMPLES: Array<{ name: string; mode: Mode; topic?: string }> = [
+  { name: 'Socrates', mode: 'search' },
+  { name: 'Ada Lovelace', mode: 'search' },
+  { name: 'Naval Ravikant', mode: 'search' },
+  { name: 'My future self in 2040', mode: 'manual' },
+];
+
+const PROGRESS_STEPS = [
+  'Mapping the ideological landscape…',
+  'Extracting perception filters…',
+  'Synthesising the cognitive avatar…',
+];
+
+export const Onboarding: React.FC<OnboardingProps> = ({ onComplete, onOpenSettings }) => {
+  const config = useLlmConfig();
+  const meta = PROVIDERS[config.provider];
+  const accent = ACCENT_CLASSES[meta.accent];
+
+  const [mode, setMode] = useState<Mode>('manual');
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
   const [links, setLinks] = useState('');
+  const [topic, setTopic] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [loadingStep, setLoadingStep] = useState('');
+  const [isBuilding, setIsBuilding] = useState(false);
+  const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [sources, setSources] = useState<GroundingSource[]>([]);
 
   const handleSearch = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || isSearching) return;
     setIsSearching(true);
     setError(null);
-    setBio('');
-    
+    setSources([]);
     try {
-      const result = await searchUserBio(name);
+      const result = await searchUserBio(name.trim());
       setBio(result.bio);
-      if (result.bio.includes("No bio found")) {
-         setError("Could not find sufficient ideological data. Please enter profile manually.");
+      setSources(result.sources ?? []);
+      if (!result.bio.trim()) {
+        setError('No usable profile came back. Write the worldview yourself instead.');
+        setMode('manual');
       }
-    } catch (e) {
-      setError("Connection to the consciousness grid failed.");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Lookup failed: ${err.message}`
+          : 'Lookup failed. Check your connection in Settings.'
+      );
     } finally {
       setIsSearching(false);
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name || !bio) return;
-    
-    setIsAnalyzing(true);
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!name.trim() || !bio.trim() || isBuilding) return;
+
+    setIsBuilding(true);
+    setError(null);
+    setStep(0);
+
     try {
-        setLoadingStep('Mapping ideological landscape...');
-        const finalBio = await analyzeIdentity(name, bio, links);
-        
-        setLoadingStep('Synthesizing cognitive avatar...');
-        await new Promise(resolve => setTimeout(resolve, 600));
-        const avatarUrl = await generateAvatar(name, finalBio);
-        
-        onComplete({ 
-          name, 
-          bio: finalBio, 
-          links: links, 
-          source: mode,
-          avatarUrl: avatarUrl
-        });
+      setStep(1);
+      const profile = await analyzeIdentity(name.trim(), bio.trim(), links.trim());
+      setStep(2);
+      const avatarUrl = await generateAvatar(name.trim(), profile);
+      onComplete({
+        name: name.trim(),
+        bio: profile || bio.trim(),
+        links: links.trim(),
+        source: mode,
+        topic: topic.trim() || undefined,
+        avatarUrl,
+      });
     } catch (err) {
-        onComplete({ name, bio, links: links, source: mode });
+      // A failed profile pass should not block the session — fall back to raw bio.
+      if (!bio.trim()) {
+        setError(err instanceof Error ? err.message : 'Could not build the profile.');
+        setIsBuilding(false);
+        return;
+      }
+      onComplete({
+        name: name.trim(),
+        bio: bio.trim(),
+        links: links.trim(),
+        source: mode,
+        topic: topic.trim() || undefined,
+      });
     } finally {
-        setIsAnalyzing(false);
-        setLoadingStep('');
+      setIsBuilding(false);
+      setStep(0);
+    }
+  };
+
+  const applyExample = (example: (typeof EXAMPLES)[number]) => {
+    setMode(example.mode);
+    setName(example.name);
+    setBio('');
+    setSources([]);
+    setError(null);
+    if (example.mode === 'manual' && example.name === 'My future self in 2040') {
+      setName('Future Self');
+      setBio(
+        'A version of me twenty years ahead: calmer, more selective about what deserves attention, allergic to urgency, financially free, and deeply invested in craft over status. Speaks plainly, refuses hype, and treats rest as part of the work.'
+      );
     }
   };
 
   return (
-    <div className="max-w-3xl mx-auto w-full p-5 sm:p-8 md:p-14 glass-panel rounded-[2.5rem] sm:rounded-[3.5rem] border-t border-cyan-900 shadow-2xl animate-fade-in-up my-4">
-      <div className="mb-10 md:mb-14 text-center">
-        <div className="inline-block p-5 md:p-6 rounded-[2rem] bg-cyan-950/30 mb-8 border border-cyan-800 shadow-[0_0_30px_rgba(34,211,238,0.15)]">
-             <svg className="w-12 h-12 md:w-16 md:h-16 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+    <div className="mx-auto w-full max-w-2xl animate-fade-in-up px-1 py-4">
+      {/* Hero */}
+      <div className="mb-7 text-center">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5">
+          <span className={`h-1.5 w-1.5 rounded-full ${accent.dot}`} />
+          <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-neutral-400">
+            {meta.name}
+          </span>
+          <span className="max-w-[140px] truncate font-mono text-[9px] text-neutral-600">{config.model}</span>
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="ml-1 font-mono text-[9px] uppercase tracking-[0.14em] text-cyan-400 hover:text-cyan-300"
+            >
+              change
+            </button>
+          )}
         </div>
-        <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-white to-purple-500 mb-5 sm:mb-6 tracking-tighter uppercase leading-tight px-2">
-          Initialize Perception
-        </h2>
-        <p className="text-neutral-400 max-w-md mx-auto text-sm md:text-base leading-relaxed font-light opacity-80">
-            Construct a high-fidelity digital consciousness link to replicate unique ideological perspectives.
+        <h1 className="font-display text-3xl font-semibold tracking-tight text-white sm:text-[2.6rem] sm:leading-[1.1]">
+          Build a parallel consciousness
+        </h1>
+        <p className="mx-auto mt-3 max-w-md text-balance text-[13px] leading-relaxed text-neutral-400 sm:text-sm">
+          Give Duet a person — a public figure, a mentor, a future version of yourself. It reconstructs
+          how they see the world, then argues with you from inside that worldview.
         </p>
       </div>
 
-      <div className="flex gap-3 md:gap-5 mb-10 sm:mb-12 justify-center">
-        <button
-          onClick={() => setMode('manual')}
-          className={`px-6 sm:px-8 md:px-10 py-3.5 sm:py-4 rounded-2xl text-[10px] sm:text-[11px] font-mono uppercase tracking-[0.2em] sm:tracking-[0.3em] transition-all active:scale-95 ${
-            mode === 'manual' 
-              ? 'bg-cyan-500 text-black font-bold shadow-xl shadow-cyan-500/30' 
-              : 'text-neutral-600 hover:text-neutral-300 bg-white/5 border border-white/5'
-          }`}
-        >
-          [ Manual ]
-        </button>
-        <button
-          onClick={() => setMode('search')}
-          className={`px-6 sm:px-8 md:px-10 py-3.5 sm:py-4 rounded-2xl text-[10px] sm:text-[11px] font-mono uppercase tracking-[0.2em] sm:tracking-[0.3em] transition-all active:scale-95 ${
-            mode === 'search' 
-              ? 'bg-purple-600 text-white font-bold shadow-xl shadow-purple-500/30 border border-purple-500/50' 
-              : 'text-neutral-600 hover:text-neutral-300 bg-white/5 border border-white/5'
-          }`}
-        >
-          [ Search ]
-        </button>
-      </div>
+      {/* Card */}
+      <form
+        onSubmit={handleSubmit}
+        className="rounded-[1.75rem] border border-white/10 bg-[#0a0a0a]/85 p-5 shadow-3xl backdrop-blur-xl sm:p-7"
+      >
+        {/* Mode switch */}
+        <div className="mb-6 grid grid-cols-2 gap-1.5 rounded-2xl border border-white/[0.06] bg-black/40 p-1.5">
+          {(['manual', 'search'] as Mode[]).map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                setMode(value);
+                setError(null);
+              }}
+              className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 font-mono text-[10px] uppercase tracking-[0.16em] transition-all ${
+                mode === value
+                  ? 'bg-white/[0.09] text-white shadow-inner'
+                  : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              {value === 'manual' ? <IconSpark size={13} /> : <IconSearch size={13} />}
+              {value === 'manual' ? 'I describe them' : 'Look them up'}
+            </button>
+          ))}
+        </div>
 
-      <form onSubmit={handleSubmit} className="space-y-10">
-        <div className="group">
-          <label className="block text-[10px] uppercase tracking-[0.4em] text-neutral-600 mb-4 font-mono font-bold ml-2">Subject_Identity</label>
-          <div className="flex flex-col sm:flex-row gap-5">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full bg-black/40 border border-neutral-800 rounded-3xl px-7 py-5 text-white focus:outline-none focus:border-cyan-500 transition-all placeholder-neutral-800 text-base font-normal shadow-inner"
-              placeholder={mode === 'manual' ? "Target Identity Name" : "e.g. Socrates, Elon Musk"}
+        <div className="space-y-4">
+          <Field
+            label="Subject"
+            hint={
+              <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-neutral-600">
+                {mode === 'search' ? 'public figure or person' : 'name of the persona'}
+              </span>
+            }
+          >
+            <div className="flex gap-2">
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder={mode === 'search' ? 'e.g. Hannah Arendt' : 'e.g. My mentor Ravi'}
+                className={inputClass}
+                autoComplete="off"
+              />
+              {mode === 'search' && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleSearch}
+                  loading={isSearching}
+                  disabled={!name.trim()}
+                  className="shrink-0"
+                >
+                  {isSearching ? 'Reading' : 'Look up'}
+                </Button>
+              )}
+            </div>
+          </Field>
+
+          {mode === 'search' && sources.length > 0 && (
+            <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+              <p className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.18em] text-neutral-500">
+                Grounded in
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {sources.slice(0, 5).map((source) => (
+                  <a
+                    key={source.uri}
+                    href={source.uri}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="max-w-[220px] truncate rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[10px] text-neutral-400 hover:border-cyan-500/40 hover:text-cyan-300"
+                  >
+                    {source.title}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <Field
+            label="Worldview"
+            hint={
+              <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-neutral-600">
+                {bio.length}/4000
+              </span>
+            }
+          >
+            <textarea
+              value={bio}
+              onChange={(event) => setBio(event.target.value.slice(0, 4000))}
+              placeholder="What do they believe? What do they notice first? What do they refuse to say? The sharper the material, the sharper the clone."
+              className={`${inputClass} h-36 resize-none leading-relaxed`}
+              readOnly={isSearching}
             />
-            {mode === 'search' && (
-              <button
-                type="button"
-                onClick={handleSearch}
-                disabled={isSearching || !name}
-                className="bg-white text-black hover:bg-cyan-400 disabled:opacity-20 px-10 py-5 rounded-3xl font-bold transition-all text-[11px] uppercase tracking-widest active:scale-95 shadow-2xl shrink-0"
-              >
-                {isSearching ? '...' : 'Fetch Trace'}
-              </button>
-            )}
+          </Field>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Reference links" hint={<span className="font-mono text-[9px] text-neutral-600">optional</span>}>
+              <input
+                value={links}
+                onChange={(event) => setLinks(event.target.value)}
+                placeholder="essays, talks, threads"
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Session topic" hint={<span className="font-mono text-[9px] text-neutral-600">optional</span>}>
+              <input
+                value={topic}
+                onChange={(event) => setTopic(event.target.value)}
+                placeholder="what you want to discuss"
+                className={inputClass}
+              />
+            </Field>
           </div>
         </div>
 
-        <div className="group">
-          <label className="block text-[10px] uppercase tracking-[0.4em] text-neutral-600 mb-4 font-mono font-bold ml-2">
-            Ideological_Grounding
-          </label>
-          <textarea
-            value={bio}
-            onChange={(e) => setBio(e.target.value)}
-            className="w-full h-44 bg-black/40 border border-neutral-800 rounded-[2rem] px-8 py-6 text-white focus:outline-none focus:border-cyan-500 transition-all resize-none text-base leading-relaxed font-light placeholder-neutral-800 shadow-inner"
-            placeholder={mode === 'search' ? "Fetch profile to auto-populate worldview..." : "Describe the core tenets of this person's perspective..."}
-            readOnly={mode === 'search' && isSearching}
-          />
-        </div>
+        {error && (
+          <div className="mt-4 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-3.5 py-3 text-[12px] leading-relaxed text-red-300">
+            <IconWarn size={15} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
 
-        <div className="group">
-          <label className="block text-[10px] uppercase tracking-[0.4em] text-neutral-600 mb-4 font-mono font-bold ml-2">
-            Digital_Streams
-          </label>
-          <input
-            type="text"
-            value={links}
-            onChange={(e) => setLinks(e.target.value)}
-            className="w-full bg-black/40 border border-neutral-800 rounded-2xl px-7 py-5 text-white focus:outline-none focus:border-cyan-500 transition-all text-sm font-light placeholder-neutral-800 shadow-inner"
-            placeholder="Links or reference fragments"
-          />
-        </div>
-
-        {error && <div className="p-5 bg-red-900/10 border border-red-900/40 rounded-3xl text-red-500 text-[11px] font-mono animate-pulse text-center">{error}</div>}
-
-        <button
+        <Button
           type="submit"
-          disabled={!bio || !name || isAnalyzing}
-          className="w-full bg-gradient-to-br from-cyan-600 to-purple-700 hover:from-cyan-500 hover:to-purple-600 disabled:opacity-10 text-white py-6 rounded-[2.5rem] font-bold text-xs tracking-[0.4em] uppercase transition-all shadow-[0_0_50px_rgba(34,211,238,0.2)] active:scale-[0.98] flex items-center justify-center gap-5 group"
+          variant="primary"
+          size="lg"
+          full
+          className="mt-6"
+          loading={isBuilding}
+          disabled={!name.trim() || !bio.trim()}
+          icon={!isBuilding ? <IconArrowLeft size={16} className="rotate-180" /> : undefined}
         >
-          {isAnalyzing ? (
-             <span className="flex items-center gap-4">
-                <svg className="animate-spin h-6 w-6" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
-                {loadingStep}
-             </span>
-          ) : (
-            <>
-                <span>Establish Consciousness Link</span>
-                <svg className="w-5 h-5 group-hover:translate-x-2 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
-            </>
-          )}
-        </button>
+          {isBuilding ? PROGRESS_STEPS[Math.max(0, step - 1)] : 'Enter the duet'}
+        </Button>
+
+        {isBuilding && (
+          <div className="mt-4 space-y-2">
+            {PROGRESS_STEPS.map((label, index) => (
+              <div key={label} className="flex items-center gap-2.5">
+                <span
+                  className={`flex h-4 w-4 items-center justify-center rounded-full border text-[8px] ${
+                    index + 1 < step
+                      ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                      : index + 1 === step
+                        ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-300'
+                        : 'border-white/10 text-neutral-700'
+                  }`}
+                >
+                  {index + 1 < step ? '✓' : index + 1 === step ? <Spinner size={9} /> : index + 1}
+                </span>
+                <span
+                  className={`font-mono text-[10px] tracking-wide ${
+                    index + 1 <= step ? 'text-neutral-300' : 'text-neutral-700'
+                  }`}
+                >
+                  {label}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </form>
+
+      {/* Examples */}
+      {!isBuilding && (
+        <div className="mt-5">
+          <p className="mb-2 text-center font-mono text-[9px] uppercase tracking-[0.2em] text-neutral-600">
+            or start from
+          </p>
+          <div className="flex flex-wrap justify-center gap-1.5">
+            {EXAMPLES.map((example) => (
+              <button
+                key={example.name}
+                type="button"
+                onClick={() => applyExample(example)}
+                className="rounded-full border border-white/[0.08] bg-white/[0.02] px-3 py-1.5 text-[11px] text-neutral-400 transition-colors hover:border-cyan-500/30 hover:text-cyan-300"
+              >
+                {example.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 font-mono text-[9px] uppercase tracking-[0.16em] text-neutral-700">
+        <span className="inline-flex items-center gap-1.5">
+          <IconShield size={11} /> profile stays on this device
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <IconGlobe size={11} /> {meta.short.toLowerCase()} · {config.model.split('/').pop()}
+        </span>
+      </div>
     </div>
   );
 };

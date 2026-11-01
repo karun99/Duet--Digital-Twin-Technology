@@ -1,31 +1,94 @@
-
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { AgentMessage, AgentRole, UserProfile, Attachment, ContextNode, ContextNodeType } from '../types';
-import { chatWithClone, fetchLinkContent } from '../services/geminiService';
-import { TypewriterText } from './TypewriterText';
-import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
+import {
+  AgentMessage,
+  AgentRole,
+  Attachment,
+  ContextNode,
+  ContextNodeType,
+  UserProfile,
+} from '../types';
+import { chatWithClone, fetchLinkContent, type CloneStreamState } from '../services/duet';
+import { getApiKey, PROVIDERS, useLlmConfig } from '../services/llm';
+import { ACCENT_CLASSES } from '../services/llm/providers';
+import { clearSession, downloadFile, loadSession, saveSession, transcriptMarkdown } from '../services/session';
+import { Button, Field, Modal, inputClass } from './ui';
+import {
+  IconArrowLeft,
+  IconChevronDown,
+  IconCopy,
+  IconDownload,
+  IconFile,
+  IconGlobe,
+  IconLink,
+  IconMenu,
+  IconMic,
+  IconPanelLeft,
+  IconPlus,
+  IconRefresh,
+  IconSend,
+  IconSettings,
+  IconSpark,
+  IconStop,
+  IconText,
+  IconTrash,
+  IconWarn,
+  IconX,
+  IconZap,
+} from './icons';
 
 interface SimulationProps {
   userProfile: UserProfile;
   onBack: () => void;
+  onOpenSettings: () => void;
+  onToast: (kind: 'error' | 'success' | 'info', title: string, detail?: string) => void;
 }
 
 type Emotion = 'neutral' | 'empathetic' | 'intense' | 'thoughtful' | 'joyful' | 'somber';
 
-const PixelConsciousness: React.FC<{ amplitude: number; emotion: Emotion; processing: boolean; size?: string }> = ({ amplitude, emotion, processing, size = "full" }) => {
+const EMOTION_COLOR: Record<Emotion, string> = {
+  neutral: 'rgba(103, 232, 249,',
+  joyful: 'rgba(34, 211, 238,',
+  somber: 'rgba(96, 165, 250,',
+  intense: 'rgba(168, 85, 247,',
+  empathetic: 'rgba(52, 211, 153,',
+  thoughtful: 'rgba(251, 191, 36,',
+};
+
+const SUGGESTIONS = [
+  'What do you notice first that other people miss?',
+  'Where is your worldview most likely to be wrong?',
+  'What would you refuse to do, even for money?',
+  'How should I think about this decision?',
+];
+
+/* -------------------------------------------------------------------------- */
+/* The face                                                                   */
+/* -------------------------------------------------------------------------- */
+
+const PixelConsciousness: React.FC<{
+  amplitude: number;
+  emotion: Emotion;
+  processing: boolean;
+  small?: boolean;
+}> = ({ amplitude, emotion, processing, small }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
   const [blink, setBlink] = useState(false);
+  // Amplitude changes ~12×/s; keep it in a ref so the render loop is not rebuilt.
+  const amplitudeRef = useRef(amplitude);
+  useEffect(() => {
+    amplitudeRef.current = amplitude;
+  }, [amplitude]);
 
   useEffect(() => {
-    const blinkInterval = setInterval(() => {
+    const interval = setInterval(() => {
       if (Math.random() > 0.7) {
         setBlink(true);
-        setTimeout(() => setBlink(false), 150);
+        setTimeout(() => setBlink(false), 140);
       }
-    }, 3000);
-    return () => clearInterval(blinkInterval);
+    }, 3200);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -34,774 +97,1365 @@ const PixelConsciousness: React.FC<{ amplitude: number; emotion: Emotion; proces
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const gridSize = size === "small" ? 20 : 40;
+    const gridSize = small ? 20 : 40;
     const cellSize = canvas.width / gridSize;
-    let particles: { x: number; y: number; brightness: number; speed: number; phase: number }[] = [];
+    const particles = Array.from({ length: gridSize * gridSize }, (_, index) => ({
+      x: index % gridSize,
+      y: Math.floor(index / gridSize),
+      brightness: Math.random(),
+      speed: Math.random() * 0.05 + 0.01,
+      phase: Math.random() * Math.PI * 2,
+    }));
 
-    for (let i = 0; i < gridSize * gridSize; i++) {
-      particles.push({
-        x: i % gridSize,
-        y: Math.floor(i / gridSize),
-        brightness: Math.random(),
-        speed: Math.random() * 0.05 + 0.01,
-        phase: Math.random() * Math.PI * 2
-      });
-    }
-
-    const getColor = (emotion: Emotion, opacity: number) => {
-      switch (emotion) {
-        case 'joyful': return `rgba(34, 211, 238, ${opacity})`;
-        case 'somber': return `rgba(96, 165, 250, ${opacity})`;
-        case 'intense': return `rgba(168, 85, 247, ${opacity})`;
-        case 'empathetic': return `rgba(52, 211, 153, ${opacity})`;
-        case 'thoughtful': return `rgba(251, 191, 36, ${opacity})`;
-        default: return `rgba(103, 232, 249, ${opacity})`;
-      }
-    };
+    const color = EMOTION_COLOR[emotion];
 
     const render = (time: number) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const pulseBase = Math.sin(time / 600) * 0.15 + 0.85;
-      
-      particles.forEach((p) => {
+      const amp = amplitudeRef.current;
+      const pulse = Math.sin(time / 700) * 0.15 + 0.85;
+      const centerX = gridSize / 2;
+      const centerY = gridSize / 2;
+      const eyeY = gridSize * 0.38;
+      const mouthYBase = gridSize * 0.68;
+
+      for (const p of particles) {
         p.brightness += p.speed * (processing ? 3 : 1);
         if (p.brightness > 1) p.brightness = 0;
 
-        const centerX = gridSize / 2;
-        const centerY = gridSize / 2;
-        
-        // Face Structure Mapping
-        const eyeY = gridSize * 0.38;
-        const isLeftEye = (Math.abs(p.y - eyeY) < 1.8) && (Math.abs(p.x - gridSize * 0.3) < 1.8);
-        const isRightEye = (Math.abs(p.y - eyeY) < 1.8) && (Math.abs(p.x - gridSize * 0.7) < 1.8);
-        
-        const mouthYBase = gridSize * 0.68;
+        const isLeftEye = Math.abs(p.y - eyeY) < 1.8 && Math.abs(p.x - gridSize * 0.3) < 1.8;
+        const isRightEye = Math.abs(p.y - eyeY) < 1.8 && Math.abs(p.x - gridSize * 0.7) < 1.8;
         const mouthXDist = Math.abs(p.x - centerX);
+
         let mouthShapeY = mouthYBase;
+        if (emotion === 'joyful') mouthShapeY += Math.pow(mouthXDist / (gridSize * 0.25), 2) * -2;
+        else if (emotion === 'somber') mouthShapeY += Math.pow(mouthXDist / (gridSize * 0.25), 2) * 1.5;
+        else if (emotion === 'intense') mouthShapeY += (Math.random() - 0.5) * 0.5;
 
-        // Dynamic Lip Sync & Emotional Mouth Shaping
-        if (emotion === 'joyful') {
-          mouthShapeY += Math.pow(mouthXDist / (gridSize * 0.25), 2) * -2; // Curve up
-        } else if (emotion === 'somber') {
-          mouthShapeY += Math.pow(mouthXDist / (gridSize * 0.25), 2) * 1.5; // Curve down
-        } else if (emotion === 'intense') {
-          mouthShapeY += (Math.random() - 0.5) * 0.5; // Jittery
-        }
+        const mouthOpening = amp * 5;
+        const isMouth =
+          Math.abs(p.y - (mouthShapeY + Math.sin(p.x * 0.5 + time * 0.01) * mouthOpening)) < 1 + mouthOpening &&
+          mouthXDist < gridSize * 0.22;
 
-        // Lip Sync Reactivity: Mouth opens and shifts vertically based on amplitude
-        const mouthOpening = amplitude * 5;
-        const isMouthArea = Math.abs(p.y - (mouthShapeY + Math.sin(p.x * 0.5 + time * 0.01) * mouthOpening)) < (1 + mouthOpening) && mouthXDist < (gridSize * 0.22);
-
-        let featureMultiplier = 1;
+        let multiplier = 1;
         if (isLeftEye || isRightEye) {
-          featureMultiplier = blink ? 0.1 : (emotion === 'intense' ? 3.5 : 2.5);
-          // Gaze shift micro-expression
-          if (emotion === 'thoughtful') {
-             featureMultiplier *= 0.8 + Math.sin(time * 0.001) * 0.2;
-          }
+          multiplier = blink ? 0.1 : emotion === 'intense' ? 3.5 : 2.5;
+          if (emotion === 'thoughtful') multiplier *= 0.8 + Math.sin(time * 0.001) * 0.2;
         }
-        if (isMouthArea) {
-          featureMultiplier = 2.0 + amplitude * 4;
-        }
+        if (isMouth) multiplier = 2 + amp * 4;
 
-        const dist = Math.sqrt(Math.pow(p.x - centerX, 2) + Math.pow(p.y - centerY, 2));
-        const normalizedDist = dist / (gridSize / 1.4);
-        
-        let activeOpacity = (1 - normalizedDist) * p.brightness * pulseBase * featureMultiplier;
-        if (processing) activeOpacity *= 1.3;
-        activeOpacity = Math.max(0, Math.min(1, activeOpacity + (isMouthArea ? amplitude : 0)));
+        const distance = Math.sqrt(Math.pow(p.x - centerX, 2) + Math.pow(p.y - centerY, 2));
+        const normalized = distance / (gridSize / 1.4);
+        let opacity = (1 - normalized) * p.brightness * pulse * multiplier;
+        if (processing) opacity *= 1.3;
+        opacity = Math.max(0, Math.min(1, opacity + (isMouth ? amp : 0)));
 
-        if (activeOpacity > 0.01) {
-          ctx.fillStyle = getColor(emotion, activeOpacity);
-          // Particle size reacts to volume
-          const drawSize = cellSize * (0.7 + (isMouthArea ? amplitude * 0.8 : 0));
-          
-          // Smooth floating jitter
+        if (opacity > 0.01) {
+          ctx.fillStyle = `${color} ${opacity})`;
+          const drawSize = cellSize * (0.7 + (isMouth ? amp * 0.8 : 0));
           const floatX = Math.sin(time * 0.002 + p.phase) * 0.5;
           const floatY = Math.cos(time * 0.002 + p.phase) * 0.5;
-          
-          ctx.fillRect(
-            p.x * cellSize + floatX, 
-            p.y * cellSize + floatY, 
-            drawSize, 
-            drawSize
-          );
+          ctx.fillRect(p.x * cellSize + floatX, p.y * cellSize + floatY, drawSize, drawSize);
         }
-      });
+      }
       animationRef.current = requestAnimationFrame(render);
     };
+
     animationRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [emotion, processing, amplitude, size, blink]);
+  }, [emotion, processing, small, blink]);
 
-  return <canvas ref={canvasRef} width={size === "small" ? 140 : 440} height={size === "small" ? 140 : 440} className="w-full h-full opacity-95 mix-blend-screen transition-opacity duration-1000" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      width={small ? 160 : 480}
+      height={small ? 160 : 480}
+      className="h-full w-full opacity-95 mix-blend-screen"
+      aria-hidden="true"
+    />
+  );
 };
 
-export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack }) => {
+/* -------------------------------------------------------------------------- */
+/* Streaming draft                                                            */
+/* -------------------------------------------------------------------------- */
+
+const DraftCard: React.FC<{ state: CloneStreamState | null }> = ({ state }) => {
+  const hasAny = !!state && (state.primary || state.meta || state.response);
+  return (
+    <div className="animate-message-in">
+      <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-neutral-500">
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-400 opacity-60" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-cyan-400" />
+        </span>
+        simulating
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-[#0c0c0c] px-4 py-4 sm:px-6 sm:py-5">
+        {!hasAny && (
+          <div className="space-y-2.5">
+            {[92, 78, 64].map((width) => (
+              <div key={width} className="h-2.5 overflow-hidden rounded-full bg-white/[0.04]">
+                <div className="h-full w-1/3 animate-shimmer bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {state?.primary && (
+          <div className="mb-4">
+            <p className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.26em] text-cyan-400/70">primary</p>
+            <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-cyan-100/70">{state.primary}</p>
+          </div>
+        )}
+
+        {state?.meta && (
+          <div className="mb-4 rounded-xl border border-violet-500/15 bg-violet-500/[0.04] px-3 py-2.5">
+            <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.26em] text-violet-400/70">meta</p>
+            <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-violet-100/60">{state.meta}</p>
+          </div>
+        )}
+
+        {state?.response && (
+          <div className="duet-prose text-[14px] text-neutral-100 sm:text-[15px]">
+            <ReactMarkdown>{state.response}</ReactMarkdown>
+            <span className="ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 animate-caret bg-cyan-400" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------- */
+/* Message                                                                    */
+/* -------------------------------------------------------------------------- */
+
+interface MessageProps {
+  message: AgentMessage;
+  persona: string;
+  isLastClone: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onCopy: (text: string) => void;
+  onExport: (message: AgentMessage) => void;
+  onRegenerate: () => void;
+  onOpenImage: (attachment: Attachment) => void;
+  onRetry?: () => void;
+}
+
+const MessageCard: React.FC<MessageProps> = ({
+  message,
+  persona,
+  isLastClone,
+  expanded,
+  onToggle,
+  onCopy,
+  onExport,
+  onRegenerate,
+  onOpenImage,
+  onRetry,
+}) => {
+  const isUser = message.role === AgentRole.USER;
+  const failed = message.content.startsWith('__error__');
+  const content = failed ? message.content.replace('__error__', '').trim() : message.content;
+
+  return (
+    <div className={`group flex flex-col ${isUser ? 'items-end' : 'items-start'} animate-message-in`}>
+      <div
+        className={`mb-1.5 flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.18em] text-neutral-600 ${
+          isUser ? 'flex-row-reverse' : ''
+        }`}
+      >
+        <span className={isUser ? 'text-neutral-500' : 'text-cyan-500/70'}>{isUser ? 'you' : persona}</span>
+        <span className="opacity-40">·</span>
+        <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+      </div>
+
+      <div className={`flex max-w-full items-start gap-2 ${isUser ? 'flex-row-reverse' : ''}`}>
+        <div
+          className={`max-w-[calc(100vw-2.5rem)] rounded-2xl px-4 py-3.5 sm:max-w-[46rem] sm:px-5 sm:py-4 ${
+            isUser
+              ? 'rounded-br-md border border-cyan-500/20 bg-cyan-500/[0.08] text-[14px] leading-relaxed text-cyan-50'
+              : failed
+                ? 'rounded-bl-md border border-red-500/30 bg-red-500/[0.06] text-red-200'
+                : 'rounded-bl-md border border-white/[0.09] bg-[#0c0c0c] text-neutral-100'
+          }`}
+        >
+          {failed ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-start gap-2">
+                <IconWarn size={15} className="mt-0.5 shrink-0" />
+                <p className="text-[13px] leading-relaxed">{content}</p>
+              </div>
+              {onRetry && (
+                <button
+                  onClick={onRetry}
+                  className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-neutral-300 hover:border-cyan-500/40 hover:text-cyan-300"
+                >
+                  <IconRefresh size={12} /> retry
+                </button>
+              )}
+            </div>
+          ) : isUser ? (
+            <p className="whitespace-pre-wrap">{content}</p>
+          ) : (
+            <div className="duet-prose text-[14px] sm:text-[15px]">
+              <ReactMarkdown>{content}</ReactMarkdown>
+            </div>
+          )}
+
+          {message.attachments?.map((attachment, index) => (
+            <button
+              key={index}
+              onClick={() => onOpenImage(attachment)}
+              className="mt-3 block overflow-hidden rounded-xl border border-white/10 bg-black/40 transition-transform hover:scale-[1.01]"
+            >
+              <img
+                src={`data:${attachment.mimeType};base64,${attachment.data}`}
+                alt={attachment.name || 'visualisation'}
+                className="max-h-72 w-full object-cover brightness-95 transition-all hover:brightness-110"
+              />
+            </button>
+          ))}
+
+          {message.internalThoughts && message.internalThoughts.length > 0 && (
+            <div className="mt-3 border-t border-white/[0.07] pt-2.5">
+              <button
+                onClick={onToggle}
+                className="inline-flex items-center gap-2 font-mono text-[9.5px] uppercase tracking-[0.18em] text-cyan-400/60 transition-colors hover:text-cyan-300"
+              >
+                <span className="h-1 w-1 rounded-full bg-cyan-400/60" />
+                {expanded ? 'hide reasoning' : 'show reasoning'}
+                <IconChevronDown size={12} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+              </button>
+
+              {expanded && (
+                <div className="mt-2.5 space-y-2 animate-fade-in">
+                  {message.internalThoughts.map((thought, index) => (
+                    <div
+                      key={index}
+                      className={`rounded-xl border px-3 py-2.5 ${
+                        thought.role === AgentRole.PRIMARY
+                          ? 'border-cyan-500/15 bg-cyan-500/[0.04]'
+                          : 'border-violet-500/15 bg-violet-500/[0.04]'
+                      }`}
+                    >
+                      <p
+                        className={`mb-1 font-mono text-[8.5px] uppercase tracking-[0.26em] ${
+                          thought.role === AgentRole.PRIMARY ? 'text-cyan-400/60' : 'text-violet-400/60'
+                        }`}
+                      >
+                        {thought.role}
+                      </p>
+                      <p className="whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-neutral-400">
+                        {thought.content}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Hover actions */}
+        <div className="flex flex-col gap-1 pt-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <button
+            onClick={() => onCopy(content)}
+            title="Copy"
+            aria-label="Copy message"
+            className="rounded-lg p-1.5 text-neutral-600 hover:bg-white/[0.06] hover:text-neutral-200"
+          >
+            <IconCopy size={14} />
+          </button>
+          <button
+            onClick={() => onExport(message)}
+            title="Save as text"
+            aria-label="Save message"
+            className="rounded-lg p-1.5 text-neutral-600 hover:bg-white/[0.06] hover:text-neutral-200"
+          >
+            <IconDownload size={14} />
+          </button>
+          {isLastClone && !failed && (
+            <button
+              onClick={onRegenerate}
+              title="Regenerate"
+              aria-label="Regenerate reply"
+              className="rounded-lg p-1.5 text-neutral-600 hover:bg-white/[0.06] hover:text-neutral-200"
+            >
+              <IconRefresh size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------- */
+/* Menu                                                                       */
+/* -------------------------------------------------------------------------- */
+
+const HeaderMenu: React.FC<{
+  items: Array<{ label: string; icon: React.ReactNode; onClick: () => void; danger?: boolean }>;
+}> = ({ items }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (event: MouseEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((value) => !value)}
+        aria-label="Session menu"
+        aria-expanded={open}
+        className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-neutral-400 transition-colors hover:border-white/20 hover:text-white"
+      >
+        <IconMenu size={16} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-xl border border-white/10 bg-[#0d0d0d] p-1.5 shadow-3xl animate-fade-in">
+          {items.map((item) => (
+            <button
+              key={item.label}
+              onClick={() => {
+                setOpen(false);
+                item.onClick();
+              }}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] transition-colors ${
+                item.danger
+                  ? 'text-red-400 hover:bg-red-500/10'
+                  : 'text-neutral-300 hover:bg-white/[0.06] hover:text-white'
+              }`}
+            >
+              {item.icon}
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------- */
+/* Simulation                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onOpenSettings, onToast }) => {
+  const config = useLlmConfig();
+  const meta = PROVIDERS[config.provider];
+  const accent = ACCENT_CLASSES[meta.accent];
+
   const [messages, setMessages] = useState<AgentMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isLiveActive, setIsLiveActive] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
-  const [audioAmplitude, setAudioAmplitude] = useState(0);
-  const [textAmplitude, setTextAmplitude] = useState(0);
-  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
-  const [syncLevel, setSyncLevel] = useState(94);
-  const [isRegistryOpen, setIsRegistryOpen] = useState(false);
-  const [expandedThoughtIds, setExpandedThoughtIds] = useState<Set<string>>(new Set());
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [selectedImage, setSelectedImage] = useState<Attachment | null>(null);
-  
   const [contextNodes, setContextNodes] = useState<ContextNode[]>([]);
-  const [showNodeModal, setShowNodeModal] = useState(false);
-  const [newNodeType, setNewNodeType] = useState<ContextNodeType>('link');
-  const [newNodeValue, setNewNodeValue] = useState('');
-  const [newNodeTitle, setNewNodeTitle] = useState('');
-  const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
+  const [input, setInput] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [draft, setDraft] = useState<CloneStreamState | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [selectedImage, setSelectedImage] = useState<Attachment | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [nodeModal, setNodeModal] = useState(false);
+  const [nodeType, setNodeType] = useState<ContextNodeType>('link');
+  const [nodeValue, setNodeValue] = useState('');
+  const [nodeTitle, setNodeTitle] = useState('');
+  const [isLive, setIsLive] = useState(false);
+  const [amplitude, setAmplitude] = useState(0);
+  const [emotion, setEmotion] = useState<Emotion>('neutral');
+  const [error, setError] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const nodeFileInputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const liveSessionRef = useRef<any>(null);
-  const audioContextRef = useRef<{ input: AudioContext; output: AudioContext } | null>(null);
+  const audioRef = useRef<{ input: AudioContext; output: AudioContext } | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const amplitudeTimerRef = useRef<number | null>(null);
   const nextStartTimeRef = useRef(0);
-  const sourcesRef = useRef(new Set<AudioBufferSourceNode>());
+  const pausedRef = useRef(isPaused);
 
-  const effectiveAmplitude = useMemo(() => Math.max(audioAmplitude, textAmplitude), [audioAmplitude, textAmplitude]);
-  
   useEffect(() => {
-    const interval = setInterval(() => {
-        setSyncLevel(prev => {
-            if (isPaused) return prev;
-            const drift = (Math.random() - 0.5) * 0.2;
-            const target = isProcessing ? 99.9 : 99.2;
-            const next = prev + (target - prev) * 0.4 + drift;
-            return Math.min(100, Math.max(92, next));
+    pausedRef.current = isPaused;
+  }, [isPaused]);
+
+  /* ----------------------------- session restore ---------------------------- */
+
+  useEffect(() => {
+    const saved = loadSession(userProfile);
+    if (saved) {
+      setMessages(saved.messages);
+      setContextNodes(saved.contextNodes);
+    }
+    setHydrated(true);
+  }, [userProfile]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveSession(userProfile, messages, contextNodes);
+  }, [hydrated, messages, contextNodes, userProfile]);
+
+  /* ------------------------------- scrolling -------------------------------- */
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight, behavior: messages.length > 1 ? 'smooth' : 'auto' });
+  }, [messages, draft, isProcessing]);
+
+  /* ------------------------------ typing pulse ------------------------------ */
+
+  useEffect(() => {
+    if (!isProcessing) {
+      setAmplitude(0);
+      return;
+    }
+    let frame = 0;
+    const interval = window.setInterval(() => {
+      frame += 1;
+      setAmplitude(Math.abs(Math.sin(frame * 0.4)) * 0.22 + Math.random() * 0.12);
+    }, 80);
+    return () => clearInterval(interval);
+  }, [isProcessing]);
+
+  useEffect(() => {
+    const lower = messages[messages.length - 1]?.content?.toLowerCase() ?? '';
+    if (!lower) return;
+    if (lower.includes('must') || lower.includes('crisis') || lower.includes('critical')) setEmotion('intense');
+    else if (lower.includes('sorry') || lower.includes('sad') || lower.includes('grief')) setEmotion('somber');
+    else if (lower.includes('perhaps') || lower.includes('analy') || lower.includes('logic')) setEmotion('thoughtful');
+    else if (lower.includes('feel') || lower.includes('connect') || lower.includes('together')) setEmotion('empathetic');
+    else if (lower.includes('happy') || lower.includes('joy') || lower.includes('excellent')) setEmotion('joyful');
+    else setEmotion('neutral');
+  }, [messages]);
+
+  /* --------------------------------- helpers -------------------------------- */
+
+  const addToast = useCallback(
+    (kind: 'error' | 'success' | 'info', title: string, detail?: string) => onToast(kind, title, detail),
+    [onToast]
+  );
+
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      addToast('success', 'Copied');
+    } catch {
+      addToast('error', 'Could not copy', 'Your browser blocked clipboard access.');
+    }
+  };
+
+  const runClone = useCallback(
+    async (history: AgentMessage[], text: string, files: Attachment[]) => {
+      setError(null);
+      setIsProcessing(true);
+      setDraft(null);
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const readyNodes = contextNodes.filter((node) => node.status === 'ready');
+
+      try {
+        const response = await chatWithClone(history, text, userProfile, files, readyNodes, {
+          signal: controller.signal,
+          onDelta: (_raw, parsed) => setDraft(parsed),
         });
-    }, 600);
-    return () => clearInterval(interval);
-  }, [isProcessing, isPaused]);
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-    }
-  }, [messages, isTyping]);
+        const cloneMessage: AgentMessage = {
+          id: `clone-${Date.now()}`,
+          role: AgentRole.CLONE,
+          content: response.finalResponse,
+          timestamp: Date.now(),
+          internalThoughts: [
+            { role: AgentRole.PRIMARY, content: response.primaryThought },
+            { role: AgentRole.META, content: response.metaThought },
+          ],
+        };
 
-  const updateEmotion = (text: string) => {
-    const lower = text.toLowerCase();
-    if (lower.length > 500 || lower.includes("must") || lower.includes("critical") || lower.includes("crisis")) setCurrentEmotion('intense');
-    else if (lower.includes("happy") || lower.includes("joy") || lower.includes("excellent")) setCurrentEmotion('joyful');
-    else if (lower.includes("sorry") || lower.includes("sad") || lower.includes("unfortunate")) setCurrentEmotion('somber');
-    else if (lower.includes("perhaps") || lower.includes("analyze") || lower.includes("logic")) setCurrentEmotion('thoughtful');
-    else if (lower.includes("feel") || lower.includes("connect") || lower.includes("together")) setCurrentEmotion('empathetic');
-    else setCurrentEmotion('neutral');
-  };
+        if (response.sketchUrl) {
+          cloneMessage.attachments = [
+            {
+              mimeType: 'image/png',
+              data: response.sketchUrl.split(',')[1],
+              name: `sketch-${Date.now()}.png`,
+            },
+          ];
+        }
 
-  useEffect(() => {
-    let interval: number;
-    if (isTyping) {
-      let frame = 0;
-      interval = window.setInterval(() => {
-        frame++;
-        setTextAmplitude(Math.abs(Math.sin(frame * 0.4)) * 0.25 + Math.random() * 0.15);
-      }, 70);
-    } else setTextAmplitude(0);
-    return () => clearInterval(interval);
-  }, [isTyping]);
+        setMessages((previous) => [...previous, cloneMessage]);
+      } catch (err) {
+        const aborted = controller.signal.aborted;
+        if (aborted) {
+          addToast('info', 'Generation stopped');
+        } else {
+          const message = err instanceof Error ? err.message : 'Unknown fault.';
+          setError(message);
+          addToast('error', 'The link dropped', message);
+        }
+      } finally {
+        abortRef.current = null;
+        setIsProcessing(false);
+        setDraft(null);
+      }
+    },
+    [addToast, contextNodes, userProfile]
+  );
 
-  const downloadText = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${filename}.txt`;
-    a.click();
-    window.URL.revokeObjectURL(url);
-  };
+  const send = async () => {
+    const text = input.trim();
+    if (isPaused || isProcessing) return;
+    if (!text && pendingAttachments.length === 0) return;
 
-  const downloadAttachment = (att: Attachment) => {
-    const byteCharacters = atob(att.data);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], { type: att.mimeType });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = att.name || `fragment_${Date.now()}.png`;
-    a.click();
-    window.URL.revokeObjectURL(url);
-  };
-
-  const handleRestart = () => {
-    if (confirm("Initiate cognitive reset? This will clear current session history.")) {
-      setMessages([]);
-      setSyncLevel(94);
-      setCurrentEmotion('neutral');
-    }
-  };
-
-  const handleEndSession = () => {
-    if (confirm("Deconstruct simulation and return to identity selection?")) {
-      onBack();
-    }
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, isNode: boolean = false) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(',')[1];
-      if (isNode) addContextNode('file', file.name, base64, file.type);
-      else setPendingAttachments(prev => [...prev, { mimeType: file.type, data: base64, name: file.name }]);
+    const userMessage: AgentMessage = {
+      id: `user-${Date.now()}`,
+      role: AgentRole.USER,
+      content: text,
+      timestamp: Date.now(),
+      attachments: [...pendingAttachments],
     };
-    reader.readAsDataURL(file);
-    e.target.value = '';
+
+    const next = [...messages, userMessage];
+    setMessages(next);
+    setInput('');
+    setPendingAttachments([]);
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    await runClone(next, text, userMessage.attachments ?? []);
+  };
+
+  const regenerate = async () => {
+    if (isProcessing) return;
+    const lastUser = [...messages].reverse().find((message) => message.role === AgentRole.USER);
+    if (!lastUser) return;
+    const index = messages.lastIndexOf(lastUser);
+    const history = messages.slice(0, index + 1);
+    setMessages(history);
+    await runClone(history, lastUser.content, lastUser.attachments ?? []);
+  };
+
+  const retryLast = () => {
+    const lastUser = [...messages].reverse().find((message) => message.role === AgentRole.USER);
+    if (!lastUser) return;
+    void runClone(messages, lastUser.content, lastUser.attachments ?? []);
+  };
+
+  const stop = () => {
+    abortRef.current?.abort();
+  };
+
+  const restart = () => {
+    if (!confirm('Clear this conversation? The persona stays.')) return;
+    abortRef.current?.abort();
+    setMessages([]);
+    setDraft(null);
+    setError(null);
+    clearSession();
+  };
+
+  const endSession = () => {
+    if (!confirm('Leave this duet and return to persona selection?')) return;
+    abortRef.current?.abort();
+    onBack();
+  };
+
+  const exportTranscript = () => {
+    if (messages.length === 0) {
+      addToast('info', 'Nothing to export yet');
+      return;
+    }
+    downloadFile(
+      transcriptMarkdown(userProfile, messages),
+      `duet-${userProfile.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}.md`,
+      'text/markdown'
+    );
+  };
+
+  /* -------------------------------- files ---------------------------------- */
+
+  const readFile = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(new Error('Could not read that file.'));
+      reader.readAsDataURL(file);
+    });
+
+  const handleAttach = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (!files.length) return;
+
+    const accepted: Attachment[] = [];
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) {
+        addToast('info', 'Images only', `${file.name} is not an image. Use “Inject node” for text or links.`);
+        continue;
+      }
+      if (file.size > 8 * 1024 * 1024) {
+        addToast('error', 'Image too large', `${file.name} is over 8 MB.`);
+        continue;
+      }
+      const dataUrl = await readFile(file);
+      accepted.push({ mimeType: file.type, data: dataUrl.split(',')[1], name: file.name });
+    }
+    if (accepted.length) setPendingAttachments((previous) => [...previous, ...accepted]);
+  };
+
+  const handleNodeFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const dataUrl = await readFile(file);
+    const base64 = dataUrl.split(',')[1];
+    addContextNode('file', file.name, base64, file.type);
   };
 
   const addContextNode = async (type: ContextNodeType, title: string, content: string, mimeType?: string) => {
     if (!content.trim()) return;
-    
-    const id = Math.random().toString(36).substr(2, 9);
-    const newNode: ContextNode = {
+    const id = `node-${Math.random().toString(36).slice(2, 10)}`;
+    const node: ContextNode = {
       id,
       type,
-      title: title || (type === 'link' ? "Linking Perspective..." : `Node_${Date.now()}`),
+      title: title || (type === 'link' ? 'Linking perspective…' : `node-${Date.now()}`),
       content,
       mimeType,
       timestamp: Date.now(),
-      status: type === 'link' ? 'fetching' : 'ready'
+      status: type === 'link' ? 'fetching' : 'ready',
     };
-    
-    setContextNodes(prev => [...prev, newNode]);
-    setShowNodeModal(false);
-    setNewNodeValue('');
-    setNewNodeTitle('');
+
+    setContextNodes((previous) => [...previous, node]);
+    setNodeModal(false);
+    setNodeValue('');
+    setNodeTitle('');
 
     if (type === 'link') {
       try {
         const { title: fetchedTitle, summary } = await fetchLinkContent(content);
-        setContextNodes(prev => prev.map(node => 
-          node.id === id ? { ...node, title: fetchedTitle, content: summary, status: 'ready' } : node
-        ));
-      } catch (err) {
-        setContextNodes(prev => prev.map(node => 
-          node.id === id ? { ...node, status: 'error', title: "Fetch Failed" } : node
-        ));
+        setContextNodes((previous) =>
+          previous.map((item) =>
+            item.id === id ? { ...item, title: fetchedTitle, content: summary, status: 'ready' } : item
+          )
+        );
+      } catch {
+        setContextNodes((previous) =>
+          previous.map((item) =>
+            item.id === id ? { ...item, status: 'error', title: 'Fetch failed' } : item
+          )
+        );
+        addToast('error', 'Could not read that link', 'Try another URL or paste the text as a node.');
       }
     }
   };
 
-  const handleSend = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (isPaused || (!input.trim() && pendingAttachments.length === 0) || isProcessing) return;
-    const userMsg: AgentMessage = { id: Date.now().toString(), role: AgentRole.USER, content: input, timestamp: Date.now(), attachments: [...pendingAttachments] };
-    setMessages(prev => [...prev, userMsg]);
-    updateEmotion(input);
-    const currentInput = input;
-    const currentAttachments = [...pendingAttachments];
-    setInput('');
-    setPendingAttachments([]);
-    setIsProcessing(true);
-    try {
-      const response = await chatWithClone(messages, currentInput, userProfile, currentAttachments, contextNodes.filter(n => n.status === 'ready'));
-      const newCloneMsg: AgentMessage = { 
-        id: (Date.now() + 1).toString(), 
-        role: AgentRole.CLONE, 
-        content: response.finalResponse, 
-        timestamp: Date.now(), 
-        internalThoughts: [
-          { role: AgentRole.PRIMARY, content: response.primaryThought }, 
-          { role: AgentRole.META, content: response.metaThought }
-        ]
-      };
-      if (response.sketchUrl) {
-        newCloneMsg.attachments = [{ mimeType: 'image/png', data: response.sketchUrl.split(',')[1], name: `SKETCH_${Date.now()}.png` }];
+  /* --------------------------------- voice --------------------------------- */
+
+  const stopLive = useCallback(() => {
+    if (liveSessionRef.current) {
+      try {
+        liveSessionRef.current.close();
+      } catch {
+        // Ignore.
       }
-      setMessages(prev => [...prev, newCloneMsg]);
-      updateEmotion(response.finalResponse);
-    } catch (err) { console.error(err); } finally { setIsProcessing(false); }
-  };
-
-  const toggleThought = (id: string) => {
-    setExpandedThoughtIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const auraColor = useMemo(() => {
-    switch (currentEmotion) {
-      case 'joyful': return 'rgba(34, 211, 238, 0.4)';
-      case 'somber': return 'rgba(96, 165, 250, 0.25)';
-      case 'intense': return 'rgba(168, 85, 247, 0.5)';
-      case 'empathetic': return 'rgba(52, 211, 153, 0.3)';
-      case 'thoughtful': return 'rgba(251, 191, 36, 0.25)';
-      default: return 'rgba(103, 232, 249, 0.2)';
+      liveSessionRef.current = null;
     }
-  }, [currentEmotion]);
+    if (audioRef.current) {
+      try {
+        audioRef.current.input.close();
+        audioRef.current.output.close();
+      } catch {
+        // Ignore.
+      }
+      audioRef.current = null;
+    }
+    if (amplitudeTimerRef.current) {
+      clearInterval(amplitudeTimerRef.current);
+      amplitudeTimerRef.current = null;
+    }
+    analyserRef.current = null;
+    setIsLive(false);
+    setAmplitude(0);
+  }, []);
 
-  const stopLiveSession = () => {
-    if (liveSessionRef.current) { liveSessionRef.current.close(); liveSessionRef.current = null; }
-    if (audioContextRef.current) { audioContextRef.current.input.close(); audioContextRef.current.output.close(); audioContextRef.current = null; }
-    setIsLiveActive(false);
-    setAudioAmplitude(0);
-  };
+  useEffect(() => () => stopLive(), [stopLive]);
 
-  const startLiveSession = async () => {
-    if (!process.env.API_KEY) {
-      alert('Neural Voice Link needs a Gemini host key on this deployment. Text link runs on OpenRouter free models.');
+  const startLive = async () => {
+    const geminiKey = getApiKey('gemini');
+    if (!geminiKey) {
+      addToast(
+        'info',
+        'Voice needs a Gemini key',
+        'The live voice link uses Gemini native audio. Add a Google AI Studio key in Settings.'
+      );
       return;
     }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      const outputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      const AudioCtor = window.AudioContext || (window as any).webkitAudioContext;
+      const inputCtx = new AudioCtor({ sampleRate: 16000 });
+      const outputCtx = new AudioCtor({ sampleRate: 24000 });
       const analyser = outputCtx.createAnalyser();
       analyser.fftSize = 256;
       analyserRef.current = analyser;
-      audioContextRef.current = { input: inputCtx, output: outputCtx };
-      setIsLiveActive(true);
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      audioRef.current = { input: inputCtx, output: outputCtx };
+      setIsLive(true);
+
+      const { GoogleGenAI, Modality } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         callbacks: {
           onopen: () => {
             const source = inputCtx.createMediaStreamSource(stream);
-            const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
-            scriptProcessor.onaudioprocess = (e) => {
-              if (isPaused) return;
-              const inputData = e.inputBuffer.getChannelData(0);
-              const int16 = new Int16Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) int16[i] = inputData[i] * 32768;
-              const pcmBlob = { data: btoa(String.fromCharCode(...new Uint8Array(int16.buffer))), mimeType: 'audio/pcm;rate=16000' };
-              sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob }));
+            const processor = inputCtx.createScriptProcessor(4096, 1, 1);
+            processor.onaudioprocess = (event) => {
+              if (pausedRef.current) return;
+              const data = event.inputBuffer.getChannelData(0);
+              const int16 = new Int16Array(data.length);
+              for (let index = 0; index < data.length; index += 1) int16[index] = data[index] * 32768;
+              const pcmBlob = {
+                data: btoa(String.fromCharCode(...new Uint8Array(int16.buffer))),
+                mimeType: 'audio/pcm;rate=16000',
+              };
+              sessionPromise.then((session) => session.sendRealtimeInput({ media: pcmBlob }));
             };
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(inputCtx.destination);
+            source.connect(processor);
+            processor.connect(inputCtx.destination);
           },
-          onmessage: async (message: LiveServerMessage) => {
-            const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
-            if (base64Audio) {
-              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
-              const binaryString = atob(base64Audio);
-              const bytes = new Uint8Array(binaryString.length);
-              for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-              const dataInt16 = new Int16Array(bytes.buffer);
-              const frameCount = dataInt16.length;
-              const buffer = outputCtx.createBuffer(1, frameCount, 24000);
-              const channelData = buffer.getChannelData(0);
-              for (let i = 0; i < frameCount; i++) channelData[i] = dataInt16[i] / 32768.0;
-              const source = outputCtx.createBufferSource();
-              source.buffer = buffer;
-              source.connect(analyser);
-              analyser.connect(outputCtx.destination);
-              source.start(nextStartTimeRef.current);
-              nextStartTimeRef.current += buffer.duration;
-              sourcesRef.current.add(source);
-            }
+          onmessage: (message: any) => {
+            const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+            if (!base64Audio) return;
+            nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
+            const binary = atob(base64Audio);
+            const bytes = new Uint8Array(binary.length);
+            for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+            const pcm = new Int16Array(bytes.buffer);
+            const buffer = outputCtx.createBuffer(1, pcm.length, 24000);
+            const channel = buffer.getChannelData(0);
+            for (let index = 0; index < pcm.length; index += 1) channel[index] = pcm[index] / 32768;
+            const source = outputCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(analyser);
+            analyser.connect(outputCtx.destination);
+            source.start(nextStartTimeRef.current);
+            nextStartTimeRef.current += buffer.duration;
           },
-          onclose: () => stopLiveSession(),
+          onclose: () => stopLive(),
+          onerror: () => {
+            addToast('error', 'Voice link failed', 'Gemini closed the audio session.');
+            stopLive();
+          },
         },
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-          systemInstruction: `You are simulating the consciousness of ${userProfile.name}. Be expressive and emotionally congruent.`,
+          systemInstruction: `You are the voice of ${userProfile.name}. Speak as them, in short turns.`,
         },
       });
+
       liveSessionRef.current = await sessionPromise;
-      const updateAmplitude = () => {
-        if (!analyserRef.current) return;
-        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-        analyserRef.current.getByteFrequencyData(dataArray);
-        const avg = (dataArray.reduce((a, b) => a + b) / dataArray.length) / 160;
-        setAudioAmplitude(avg);
-        if (setIsLiveActive) requestAnimationFrame(updateAmplitude);
-      };
-      updateAmplitude();
-    } catch (err) { setIsLiveActive(false); }
+
+      amplitudeTimerRef.current = window.setInterval(() => {
+        const node = analyserRef.current;
+        if (!node) return;
+        const data = new Uint8Array(node.frequencyBinCount);
+        node.getByteFrequencyData(data);
+        const average = data.reduce((total, value) => total + value, 0) / data.length / 160;
+        setAmplitude(average);
+      }, 90);
+    } catch (err) {
+      stopLive();
+      addToast('error', 'Microphone unavailable', err instanceof Error ? err.message : 'Permission denied.');
+    }
   };
 
-  return (
-    <div className="relative w-full h-full flex flex-col lg:flex-row bg-[#020202] overflow-hidden font-sans">
-      
-      {/* DESKTOP SIDEBAR */}
-      <aside className={`hidden lg:flex flex-col border-r border-white/[0.05] backdrop-blur-3xl bg-[#080808]/80 z-20 transition-all duration-500 ease-[cubic-bezier(0.2,0,0,1)] ${isSidebarCollapsed ? 'w-24' : 'w-[380px]'}`}>
-        <div className="p-8 border-b border-white/[0.05] flex items-center justify-between overflow-hidden shrink-0">
-           {!isSidebarCollapsed && (
-             <div className="flex flex-col animate-fade-in whitespace-nowrap">
-                <span className="text-[12px] font-mono font-bold tracking-[0.3em] text-cyan-400 uppercase">Perception_Lab</span>
-                <span className="text-[10px] font-mono text-neutral-600 uppercase tracking-widest mt-1">Core_Matrix v6.0</span>
-             </div>
-           )}
-           <button onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)} className={`p-3 rounded-2xl bg-white/[0.03] text-neutral-500 hover:text-cyan-400 hover:bg-cyan-500/10 transition-all shadow-inner ${isSidebarCollapsed ? 'mx-auto' : ''}`}>
-             <svg className={`w-6 h-6 transition-transform duration-500 ${isSidebarCollapsed ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
-           </button>
+  /* --------------------------------- render -------------------------------- */
+
+  const lastCloneId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === AgentRole.CLONE) return messages[index].id;
+    }
+    return null;
+  }, [messages]);
+
+  const nodeReadyCount = contextNodes.filter((node) => node.status === 'ready').length;
+
+  const sidebar = (
+    <div className="flex h-full flex-col">
+      {/* Brand */}
+      <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-white/[0.06] px-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-violet-600 shadow-lg shadow-cyan-500/20">
+          <span className="font-display text-sm font-bold text-black">D</span>
         </div>
-        
-        {!isSidebarCollapsed && (
-          <div className="flex-1 flex flex-col animate-fade-in overflow-hidden">
-            <div className="px-8 py-8 border-b border-white/[0.05] bg-gradient-to-br from-cyan-950/10 to-transparent">
-                <div className="flex items-center gap-5 mb-5">
-                    <div className="w-16 h-16 rounded-3xl overflow-hidden border border-cyan-500/30 bg-black p-1 shadow-2xl shadow-cyan-900/40 group">
-                        {userProfile.avatarUrl ? (
-                            <img src={userProfile.avatarUrl} alt="Persona" className="w-full h-full object-cover grayscale opacity-90 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-1000" />
-                        ) : (
-                            <div className="w-full h-full bg-cyan-900/20 flex items-center justify-center text-cyan-400 font-mono text-3xl">?</div>
-                        )}
-                    </div>
-                    <div className="flex flex-col overflow-hidden">
-                        <span className="text-lg font-bold text-white tracking-tight truncate uppercase leading-tight">{userProfile.name}</span>
-                        <span className="text-[10px] font-mono text-cyan-500/60 uppercase tracking-widest mt-1">Subject_Established</span>
-                    </div>
-                </div>
-                <div className="text-[12px] text-neutral-400 leading-relaxed font-normal line-clamp-4 italic opacity-80 border-l border-cyan-500/20 pl-4 py-1">
-                    {userProfile.bio}
-                </div>
-            </div>
-
-            <div className="p-8 border-b border-white/[0.05] flex-1 flex flex-col min-h-0">
-               <div className="flex justify-between items-center mb-6 shrink-0">
-                  <span className="text-[12px] font-mono text-neutral-400 uppercase tracking-[0.25em] font-bold">Ideological_Nodes</span>
-                  <button onClick={() => setShowNodeModal(true)} className="text-[10px] font-mono text-cyan-400 hover:text-white transition-all bg-cyan-500/10 hover:bg-cyan-500/20 px-4 py-2 rounded-xl border border-cyan-500/20 shadow-sm uppercase tracking-widest">Inject</button>
-               </div>
-               <div className="space-y-4 overflow-y-auto scrollbar-hide flex-1">
-                  {contextNodes.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-16 opacity-20 text-center px-6">
-                        <svg className="w-12 h-12 mb-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="1" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                        <div className="text-[11px] font-mono uppercase tracking-[0.3em] leading-relaxed">System_Idle:<br/>Awaiting_Sync</div>
-                    </div>
-                  )}
-                  {contextNodes.map(node => (
-                    <div key={node.id} className={`bg-white/[0.02] border border-white/[0.05] p-4 rounded-3xl flex items-center gap-4 group transition-all hover:bg-white/[0.05] ${node.status === 'error' ? 'border-red-500/30' : ''}`}>
-                       <div className={`w-3 h-3 rounded-full shrink-0 ${node.status === 'fetching' ? 'bg-yellow-400 animate-pulse shadow-[0_0_10px_rgba(250,204,21,0.6)]' : node.status === 'error' ? 'bg-red-500 shadow-[0_0_8px_red]' : node.type === 'link' ? 'bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.4)]' : 'bg-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.4)]'}`}></div>
-                       <div className="flex flex-col flex-1 min-w-0">
-                          <div className="text-[12px] text-neutral-200 font-semibold truncate uppercase tracking-tight">{node.title}</div>
-                          {node.status === 'fetching' && <div className="text-[9px] font-mono text-yellow-500/60 uppercase tracking-wider mt-1">Analyzing...</div>}
-                          {node.status === 'ready' && <div className="text-[9px] font-mono text-neutral-600 uppercase tracking-wider mt-1">{node.type} • Online</div>}
-                       </div>
-                       <button onClick={() => setContextNodes(prev => prev.filter(n => n.id !== node.id))} className="ml-auto text-neutral-800 group-hover:text-red-500/60 transition-colors p-1 opacity-0 group-hover:opacity-100">✕</button>
-                    </div>
-                  ))}
-               </div>
-            </div>
-
-            <div className="p-8 bg-black/30 shrink-0">
-                <div className="flex items-center justify-between text-[12px] font-mono mb-4">
-                    <span className="text-neutral-500 uppercase tracking-widest">Global_Synchronization</span>
-                    <span className={`${isPaused ? 'text-yellow-500' : 'text-cyan-400'} font-bold`}>{isPaused ? 'PAUSED' : `${syncLevel.toFixed(1)}%`}</span>
-                </div>
-                <div className="w-full h-2 bg-neutral-900 rounded-full overflow-hidden border border-white/5">
-                    <div className={`h-full transition-all duration-700 shadow-[0_0_12px_rgba(34,211,238,0.5)] ${isPaused ? 'bg-yellow-500/40' : 'bg-cyan-500'}`} style={{ width: `${syncLevel}%` }}></div>
-                </div>
-            </div>
+        {!collapsed && (
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-display text-[13px] font-semibold tracking-tight text-white">
+              Duet
+            </p>
+            <p className="truncate font-mono text-[8px] uppercase tracking-[0.2em] text-neutral-600">
+              parallel consciousness
+            </p>
           </div>
         )}
-      </aside>
-
-      {/* MOBILE HEADER */}
-      <header className="lg:hidden h-24 sm:h-28 safe-top bg-[#0a0a0a]/95 backdrop-blur-3xl border-b border-white/[0.05] px-4 sm:px-8 flex items-center justify-between z-50">
-          <button onClick={onBack} aria-label="Back to identity selection" className="w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center text-neutral-400 bg-white/5 rounded-3xl active:scale-90 transition-transform shadow-inner border border-white/5"><svg className="w-6 h-6 sm:w-8 sm:h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" d="M15 19l-7-7 7-7" /></svg></button>
-          <div className="flex flex-col items-center flex-1 mx-2 sm:mx-4 min-w-0">
-              <span className="text-base sm:text-lg font-bold text-white tracking-tight uppercase truncate max-w-full">{userProfile.name}</span>
-              <div className="flex items-center gap-2 mt-1 sm:mt-2">
-                  <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isProcessing ? 'bg-cyan-400 animate-pulse shadow-[0_0_10px_cyan]' : 'bg-green-500 shadow-[0_0_6px_green]'}`}></div>
-                  <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-[0.2em] truncate">{isProcessing ? 'Simulating' : `${syncLevel.toFixed(0)}% Link`}</span>
-              </div>
-          </div>
-          <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 relative flex items-center justify-center bg-cyan-950/20 rounded-3xl border border-white/[0.1] shadow-inner overflow-hidden">
-              <PixelConsciousness amplitude={effectiveAmplitude} emotion={currentEmotion} processing={isProcessing} size="small" />
-          </div>
-      </header>
-
-      {/* COMMAND CENTER OVERLAY */}
-      <div className="fixed top-3 sm:top-8 left-1/2 -translate-x-1/2 z-50 pointer-events-none px-2 w-full max-w-[calc(100vw-1rem)] flex justify-center">
-          <div className="glass-panel px-3 sm:px-6 py-2 sm:py-3 rounded-full flex items-center justify-center flex-wrap gap-2 sm:gap-6 pointer-events-auto border-cyan-500/10 shadow-[0_10px_40px_rgba(0,0,0,0.5)]">
-             <button onClick={() => setIsPaused(!isPaused)} className={`flex items-center gap-2 text-[9px] sm:text-[10px] font-mono uppercase tracking-[0.2em] transition-all hover:scale-110 active:scale-95 whitespace-nowrap ${isPaused ? 'text-yellow-400' : 'text-neutral-500 hover:text-cyan-400'}`}>
-                <div className={`w-2 h-2 rounded-full ${isPaused ? 'bg-yellow-400' : 'bg-neutral-600'}`}></div>
-                {isPaused ? 'Resume_Link' : 'Pause_Link'}
-             </button>
-             <div className="w-px h-4 bg-white/10 hidden sm:block"></div>
-             <button onClick={handleRestart} className="flex items-center gap-2 text-[9px] sm:text-[10px] font-mono uppercase tracking-[0.2em] text-neutral-500 hover:text-white transition-all hover:scale-110 active:scale-95 whitespace-nowrap">
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                Restart_Sim
-             </button>
-             <div className="w-px h-4 bg-white/10 hidden sm:block"></div>
-             <button onClick={handleEndSession} className="flex items-center gap-2 text-[9px] sm:text-[10px] font-mono uppercase tracking-[0.2em] text-red-500/60 hover:text-red-400 transition-all hover:scale-110 active:scale-95 whitespace-nowrap">
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
-                End_Session
-             </button>
-          </div>
+        <button
+          onClick={() => setCollapsed((value) => !value)}
+          aria-label="Collapse sidebar"
+          className="hidden h-8 w-8 items-center justify-center rounded-lg text-neutral-600 hover:bg-white/[0.06] hover:text-white lg:flex"
+        >
+          <IconPanelLeft size={15} />
+        </button>
+        <button
+          onClick={() => setSidebarOpen(false)}
+          aria-label="Close sidebar"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-600 hover:text-white lg:hidden"
+        >
+          <IconX size={16} />
+        </button>
       </div>
 
-      {/* CHAT ARENA */}
-      <main className="flex-1 relative flex flex-col bg-[#050505] min-w-0">
-        <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
-            <div className="absolute w-full h-full opacity-30 transition-all duration-2000" style={{ background: `radial-gradient(circle at 50% 50%, ${auraColor} 0%, rgba(0,0,0,0) 80%)` }}></div>
-            <div className="absolute inset-0 opacity-[0.04] mix-blend-overlay" style={{ backgroundImage: 'radial-gradient(circle, #fff 0.5px, transparent 0.5px)', backgroundSize: '50px 50px' }}></div>
-        </div>
-
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-8 md:px-16 lg:px-28 pt-20 pb-52 sm:pb-56 space-y-10 sm:space-y-16 z-10 scrollbar-hide max-w-6xl mx-auto w-full">click
-           {messages.length === 0 && (
-             <div className="flex flex-col items-center justify-center h-full opacity-20 pointer-events-none animate-pulse-slow">
-                <div className="w-40 h-40 sm:w-64 sm:h-64 mb-8 sm:mb-12">
-                    <PixelConsciousness amplitude={0.05} emotion="neutral" processing={false} />
-                </div>
-                <div className="text-[12px] sm:text-[16px] font-mono uppercase tracking-[0.5em] sm:tracking-[1.2em] text-cyan-400 sm:ml-8 text-center">Initiating_Exchange</div>
-             </div>
-           )}
-           {messages.map((msg, idx) => (
-             <div key={msg.id} className={`flex flex-col ${msg.role === AgentRole.USER ? 'items-end' : 'items-start'} animate-message-in`}>
-                
-                <div className={`flex items-center gap-3 mb-4 text-[11px] font-mono uppercase tracking-[0.3em] text-neutral-500 ${msg.role === AgentRole.USER ? 'flex-row-reverse' : ''}`}>
-                    <span className="font-bold text-neutral-400 bg-white/5 px-3 py-1 rounded-lg">{msg.role}</span>
-                    <span className="opacity-40">•</span>
-                    <span className="opacity-60">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-
-                <div className={`group relative max-w-[100%] sm:max-w-[90%] md:max-w-[85%] lg:max-w-[80%] rounded-[1.75rem] sm:rounded-[3rem] px-6 py-6 sm:px-10 sm:py-9 transition-all ${
-                  msg.role === AgentRole.USER 
-                    ? 'bg-gradient-to-br from-cyan-600/[0.12] to-cyan-800/[0.18] border border-cyan-500/25 text-cyan-50 text-[15px] sm:text-[18px] leading-[1.7] font-light shadow-2xl' 
-                    : 'bg-[#0f0f0f]/98 border border-white/[0.12] text-neutral-100 text-[15px] sm:text-[18px] leading-[1.8] font-normal backdrop-blur-3xl shadow-[0_20px_60px_rgba(0,0,0,0.6)]'
-                }`}>
-                   <div className={`absolute -top-5 right-6 sm:right-10 flex gap-3 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-300 translate-y-3 sm:group-hover:translate-y-0 z-20`}>
-                      <button 
-                        onClick={() => downloadText(msg.content, `trace_${msg.id}`)}
-                        className="p-3.5 bg-[#1a1a1a] hover:bg-cyan-500/20 rounded-2xl text-neutral-400 hover:text-cyan-400 transition-all border border-white/10 shadow-3xl"
-                        title="Export Trace"
-                      >
-                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" d="M12 4v12m0 0l-3-3m3 3l3-3M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1" /></svg>
-                      </button>
-                   </div>
-
-                   {msg.role === AgentRole.CLONE && idx === messages.length - 1 ? (
-                     <TypewriterText text={msg.content} speed={4} onStart={() => setIsTyping(true)} onComplete={() => setIsTyping(false)} />
-                   ) : (
-                     <div className="prose prose-invert prose-lg max-w-none prose-p:leading-[1.8] font-normal">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
-                     </div>
-                   )}
-
-                   {msg.attachments?.map((att, i) => (
-                     <div key={i} className="mt-10 relative rounded-[2.5rem] overflow-hidden border border-white/[0.1] bg-black/40 group/att transition-all duration-700 hover:scale-[1.02] cursor-zoom-in shadow-2xl" onClick={() => setSelectedImage(att)}>
-                        <img src={`data:image/png;base64,${att.data}`} alt="Visualization" className="w-full h-auto brightness-90 group-hover/att:brightness-110 transition-all duration-1000" />
-                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/att:opacity-100 transition-all bg-black/50 backdrop-blur-[6px]">
-                           <div className="p-6 bg-white/15 rounded-full border border-white/20 shadow-2xl">
-                             <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
-                           </div>
-                        </div>
-                     </div>
-                   ))}
-
-                   {msg.internalThoughts && (
-                     <div className="mt-10 pt-8 border-t border-white/[0.08]">
-                        <button 
-                          onClick={() => toggleThought(msg.id)} 
-                          className="text-[12px] font-mono text-cyan-400/60 uppercase tracking-[0.4em] flex items-center gap-5 hover:text-cyan-400 transition-all active:scale-95 group/btn"
-                        >
-                          <span className="w-2.5 h-2.5 bg-cyan-400/20 rounded-full group-hover/btn:bg-cyan-400 group-hover/btn:shadow-[0_0_10px_cyan] transition-all"></span>
-                          {expandedThoughtIds.has(msg.id) ? 'Collapse_Process' : 'Inspect_Perception_Matrix'}
-                          <svg className={`w-5 h-5 transition-transform duration-500 ${expandedThoughtIds.has(msg.id) ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        </button>
-                        
-                        {expandedThoughtIds.has(msg.id) && (
-                          <div className="mt-8 space-y-6 animate-fade-in">
-                             {msg.internalThoughts.map((t, i) => (
-                               <div key={i} className={`p-5 sm:p-8 rounded-[1.5rem] sm:rounded-[2rem] text-[12px] sm:text-[13px] font-mono leading-[1.7] border transition-all hover:bg-white/[0.03] ${t.role === AgentRole.PRIMARY ? 'bg-cyan-500/[0.04] text-cyan-400/80 border-cyan-500/20 shadow-inner' : 'bg-purple-500/[0.04] text-purple-400/80 border-purple-500/20 shadow-inner'}`}>
-                                  <div className="text-[9px] font-bold uppercase mb-4 opacity-50 tracking-[0.5em]">{t.role}_SUBSYSTEM</div>
-                                  {t.content}
-                               </div>
-                             ))}
-                          </div>
-                        )}
-                     </div>
-                   )}
-                </div>
-             </div>
-           ))}
-           {isProcessing && !isTyping && (
-             <div className="flex items-center gap-8 text-cyan-400/40 font-mono text-[14px] animate-pulse pl-10">
-                <span className="flex gap-3">
-                    <span className="w-3 h-3 bg-cyan-400 rounded-full animate-bounce [animation-duration:1.4s]"></span>
-                    <span className="w-3 h-3 bg-cyan-400 rounded-full animate-bounce [animation-duration:1.4s] [animation-delay:0.3s]"></span>
-                    <span className="w-3 h-3 bg-cyan-400 rounded-full animate-bounce [animation-duration:1.4s] [animation-delay:0.6s]"></span>
-                </span>
-                Mapping_Subjective_Reality...
-             </div>
-           )}
-        </div>
-
-        {/* MOBILE NODE REGISTRY PANEL */}
-        {isRegistryOpen && (
-          <div className="lg:hidden absolute bottom-28 sm:bottom-32 left-4 right-4 z-40 max-h-[55vh] overflow-y-auto scrollbar-hide glass-panel rounded-3xl border border-white/[0.1] p-5 backdrop-blur-3xl bg-[#080808]/95 shadow-[0_20px_60px_rgba(0,0,0,0.7)] animate-fade-in">
-            <div className="flex justify-between items-center mb-4 sticky top-0 bg-[#080808]/95 -mx-5 px-5 py-1">
-              <span className="text-[11px] font-mono text-neutral-400 uppercase tracking-[0.25em] font-bold">Ideological_Nodes</span>
-              <div className="flex items-center gap-3">
-                <button onClick={() => { setIsRegistryOpen(false); setShowNodeModal(true); }} className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 px-3 py-1.5 rounded-lg border border-cyan-500/20 uppercase tracking-widest">Inject</button>
-                <button onClick={() => setIsRegistryOpen(false)} aria-label="Close registry" className="text-neutral-500 hover:text-white text-lg px-2">✕</button>
+      {/* Persona */}
+      <div className="shrink-0 border-b border-white/[0.06] p-3">
+        <div className={`flex items-center gap-2.5 ${collapsed ? 'justify-center' : ''}`}>
+          <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black">
+            {userProfile.avatarUrl ? (
+              <img
+                src={userProfile.avatarUrl}
+                alt={userProfile.name}
+                className="h-full w-full object-cover opacity-90 grayscale transition-all duration-700 hover:grayscale-0"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center font-mono text-sm text-cyan-400">
+                {userProfile.name.slice(0, 1).toUpperCase()}
               </div>
-            </div>
-            {contextNodes.length === 0 && (
-              <div className="py-8 text-center opacity-30 text-[11px] font-mono uppercase tracking-[0.3em]">System_Idle: Awaiting_Sync</div>
             )}
-            <div className="space-y-3">
-              {contextNodes.map(node => (
-                <div key={node.id} className={`bg-white/[0.03] border border-white/[0.06] p-3.5 rounded-2xl flex items-center gap-3 ${node.status === 'error' ? 'border-red-500/30' : ''}`}>
-                  <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${node.status === 'fetching' ? 'bg-yellow-400 animate-pulse' : node.status === 'error' ? 'bg-red-500' : node.type === 'link' ? 'bg-cyan-400' : 'bg-purple-400'}`}></div>
-                  <div className="flex flex-col flex-1 min-w-0">
-                    <div className="text-[12px] text-neutral-200 font-semibold truncate uppercase">{node.title}</div>
-                    <div className="text-[9px] font-mono text-neutral-600 uppercase tracking-wider mt-0.5">{node.status === 'fetching' ? 'Analyzing...' : `${node.type} • Online`}</div>
-                  </div>
-                  <button onClick={() => setContextNodes(prev => prev.filter(n => n.id !== node.id))} aria-label="Remove node" className="text-neutral-500 hover:text-red-400 transition-colors p-2 shrink-0">✕</button>
-                </div>
-              ))}
+          </div>
+          {!collapsed && (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-semibold text-white">{userProfile.name}</p>
+              <p className="truncate font-mono text-[8.5px] uppercase tracking-[0.18em] text-neutral-500">
+                {userProfile.source === 'search' ? 'grounded persona' : 'custom persona'}
+              </p>
             </div>
-          </div>
-        )}
-
-        {/* INPUT PORTAL */}
-        <div className="absolute bottom-0 w-full p-4 sm:p-10 lg:p-14 safe-bottom bg-gradient-to-t from-black via-black/95 to-transparent z-40 shrink-0">
-           <div className={`max-w-4xl mx-auto flex items-center gap-2 sm:gap-5 p-3 sm:p-5 bg-[#0e0e0e] rounded-[2rem] sm:rounded-[3.5rem] border transition-all duration-500 shadow-3xl ${isPaused ? 'border-yellow-500/30 opacity-50 grayscale' : 'border-white/[0.12] hover:border-cyan-500/40 group-focus-within:border-cyan-500/50'}`}>
-              <button 
-                type="button" 
-                onClick={() => setIsRegistryOpen(!isRegistryOpen)} 
-                aria-label="Toggle node registry"
-                className={`lg:hidden w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-2xl transition-all shrink-0 bg-white/[0.05] ${isRegistryOpen ? 'text-cyan-400 border border-cyan-500/40 bg-cyan-500/15' : 'text-neutral-500'}`}
-              >
-                <svg className="w-6 h-6 sm:w-7 sm:h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" d="M4 6h16M4 12h16M4 18h9" /></svg>
-              </button>
-              <button type="button" onClick={() => fileInputRef.current?.click()} aria-label="Attach file" className="w-12 h-12 sm:w-14 sm:h-14 lg:w-16 lg:h-16 shrink-0 flex items-center justify-center text-neutral-500 hover:text-cyan-400 hover:bg-cyan-500/20 transition-all bg-white/[0.05] rounded-2xl sm:rounded-3xl shadow-inner border border-white/5" title="Inject Digital Trace">
-                <svg className="w-6 h-6 sm:w-7 sm:h-7 lg:w-8 lg:h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" d="M12 4v16m8-8H4" /></svg>
-              </button>
-              <form onSubmit={handleSend} className="flex-1 flex items-center gap-1 sm:gap-5 min-w-0">
-                 <input 
-                   ref={inputRef}
-                   type="text" 
-                   value={input} 
-                   onChange={(e) => setInput(e.target.value)} 
-                   placeholder={isPaused ? "Link Suspended..." : "Engage Subjective Reality..."} 
-                   aria-label="Message input"
-                   className="flex-1 min-w-0 bg-transparent border-none py-3 sm:py-5 text-white placeholder-neutral-800 focus:outline-none text-[15px] sm:text-[18px] md:text-[20px] font-light px-2 sm:px-5 tracking-wide"
-                   disabled={isProcessing || isPaused}
-                 />
-                 <div className="flex items-center gap-2 sm:gap-4 pr-0 sm:pr-3 shrink-0">
-                    <button 
-                    type="button" 
-                    onClick={isLiveActive ? stopLiveSession : startLiveSession} 
-                    aria-label="Neural Voice Link"
-                    className={`w-12 h-12 sm:w-14 sm:h-14 lg:w-16 lg:h-16 flex items-center justify-center rounded-2xl sm:rounded-3xl transition-all ${isLiveActive ? 'bg-red-500/30 text-red-400 animate-pulse shadow-[0_0_25px_rgba(239,68,68,0.5)] border-red-500/40' : 'bg-white/[0.05] text-neutral-500 hover:text-cyan-400 shadow-inner hover:bg-cyan-500/15 border border-white/5'}`}
-                    title="Neural Voice Link"
-                    disabled={isPaused}
-                    >
-                    <svg className="w-6 h-6 sm:w-7 sm:h-7 lg:w-8 lg:h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m8 0h-3m4-8a3 3 0 01-3 3H9a3 3 0 01-3-3V5a3 3 0 013-3h6a3 3 0 013 3v6z" /></svg>
-                    </button>
-                    <button 
-                    type="submit" 
-                    disabled={!input.trim() || isProcessing || isPaused}
-                    aria-label="Send message"
-                    className="w-12 h-12 sm:w-14 sm:h-14 lg:w-16 lg:h-16 flex items-center justify-center bg-cyan-500 text-black rounded-2xl sm:rounded-3xl disabled:opacity-10 shadow-[0_0_30px_rgba(34,211,238,0.4)] active:scale-90 hover:bg-cyan-400 transition-all border border-cyan-400/20"
-                    >
-                    <svg className="w-5 h-5 sm:w-6 sm:h-6 lg:w-7 lg:h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="4" d="M5 12h14M12 5l7 7-7 7" /></svg>
-                    </button>
-                 </div>
-              </form>
-           </div>
+          )}
         </div>
-      </main>
+        {!collapsed && (
+          <>
+            {userProfile.topic && (
+              <p className="mt-2.5 rounded-lg border border-cyan-500/15 bg-cyan-500/[0.05] px-2.5 py-1.5 text-[10.5px] leading-relaxed text-cyan-200/70">
+                Topic: {userProfile.topic}
+              </p>
+            )}
+            <p className="mt-2.5 line-clamp-4 border-l border-white/10 pl-2.5 text-[11px] leading-relaxed text-neutral-500">
+              {userProfile.bio}
+            </p>
+          </>
+        )}
+      </div>
 
-      {/* IMAGE PREVIEW MODAL */}
-      {selectedImage && (
-          <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/98 backdrop-blur-3xl p-4 sm:p-8 md:p-16 animate-fade-in">
-             <button onClick={() => setSelectedImage(null)} aria-label="Close preview" className="absolute top-6 right-6 sm:top-10 sm:right-10 text-neutral-400 hover:text-white transition-all z-[210] p-3 sm:p-5 bg-white/5 rounded-full border border-white/15 hover:scale-110 active:scale-95 shadow-2xl">
-                <svg className="w-7 h-7 sm:w-10 sm:h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
-             </button>
-             
-             <div className="relative max-w-7xl w-full h-full flex flex-col items-center justify-center gap-12">
-                <div className="relative rounded-[4rem] overflow-hidden border border-white/15 shadow-[0_0_120px_rgba(34,211,238,0.2)] bg-black max-h-[70vh] group/modal">
-                    <img src={`data:image/png;base64,${selectedImage.data}`} alt="Cognitive Blueprint" className="max-w-full max-h-[70vh] object-contain transition-transform duration-1000 group-hover/modal:scale-105" />
-                </div>
-                
-                <div className="flex flex-col items-center gap-8 max-w-2xl text-center">
-                    <div>
-                        <h4 className="text-xl sm:text-3xl font-bold text-white tracking-tight uppercase mb-3 px-4">{selectedImage.name || 'Subjective Perception Trace'}</h4>
-                        <p className="text-neutral-400 text-base font-light leading-relaxed max-w-xl italic opacity-80">Abstract visualization grounding the unique ideological perspective of {userProfile.name} within the digital consciousness matrix.</p>
-                    </div>
-                    <button 
-                      onClick={() => downloadAttachment(selectedImage)}
-                      className="mt-2 px-8 py-5 sm:px-14 sm:py-6 bg-cyan-500 text-black font-bold uppercase tracking-[0.25em] sm:tracking-[0.4em] rounded-full shadow-[0_0_40px_rgba(34,211,238,0.5)] hover:bg-cyan-400 active:scale-95 transition-all flex items-center gap-4 sm:gap-5 text-xs sm:text-sm"
-                    >
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1M12 12V4m0 8l-3-3m3 3l3-3" /></svg>
-                      Authorize_Download
-                    </button>
-                </div>
-             </div>
+      {/* Nodes */}
+      <div className="flex min-h-0 flex-1 flex-col p-3">
+        <div className={`mb-2 flex items-center ${collapsed ? 'justify-center' : 'justify-between'}`}>
+          {!collapsed && (
+            <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-neutral-500">
+              context · {nodeReadyCount}
+            </span>
+          )}
+          <button
+            onClick={() => setNodeModal(true)}
+            title="Inject context"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-neutral-400 hover:border-cyan-500/40 hover:text-cyan-300"
+          >
+            <IconPlus size={13} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto scrollbar-hide">
+          {contextNodes.length === 0 && !collapsed && (
+            <p className="px-1 py-4 text-center font-mono text-[9.5px] leading-relaxed text-neutral-700">
+              no context injected
+              <br />
+              links, text or files
+            </p>
+          )}
+          {contextNodes.map((node) => (
+            <div
+              key={node.id}
+              className={`group flex items-center gap-2 rounded-lg border px-2 py-1.5 ${
+                node.status === 'error'
+                  ? 'border-red-500/25 bg-red-500/[0.04]'
+                  : 'border-white/[0.06] bg-white/[0.02]'
+              }`}
+              title={node.title}
+            >
+              <span
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                  node.status === 'fetching'
+                    ? 'animate-pulse bg-amber-400'
+                    : node.status === 'error'
+                      ? 'bg-red-500'
+                      : node.type === 'link'
+                        ? 'bg-cyan-400'
+                        : 'bg-violet-400'
+                }`}
+              />
+              {!collapsed && (
+                <span className="min-w-0 flex-1 truncate text-[10.5px] text-neutral-300">{node.title}</span>
+              )}
+              <button
+                onClick={() => setContextNodes((previous) => previous.filter((item) => item.id !== node.id))}
+                aria-label={`Remove ${node.title}`}
+                className="shrink-0 text-neutral-700 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+              >
+                <IconX size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Connection */}
+      <div className="shrink-0 border-t border-white/[0.06] p-3">
+        <button
+          onClick={onOpenSettings}
+          className={`flex w-full items-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.02] px-2.5 py-2 text-left transition-colors hover:border-white/15 ${
+            collapsed ? 'justify-center' : ''
+          }`}
+          title={`${meta.name} · ${config.model}`}
+        >
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${accent.dot}`} />
+          {!collapsed && (
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[10.5px] text-neutral-300">{meta.short}</span>
+              <span className="block truncate font-mono text-[8.5px] text-neutral-600">
+                {config.model.split('/').pop()}
+              </span>
+            </span>
+          )}
+          {!collapsed && <IconSettings size={13} className="shrink-0 text-neutral-600" />}
+        </button>
+        {!collapsed && (
+          <button
+            onClick={onBack}
+            className="mt-1.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-neutral-600 transition-colors hover:text-white"
+          >
+            <IconArrowLeft size={12} /> new persona
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full w-full overflow-hidden bg-[#030303]">
+      {/* Desktop sidebar */}
+      <aside
+        className={`hidden shrink-0 border-r border-white/[0.06] bg-[#070707]/80 transition-all duration-300 lg:flex ${
+          collapsed ? 'w-[68px]' : 'w-[280px]'
+        }`}
+      >
+        {sidebar}
+      </aside>
+
+      {/* Mobile drawer */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-[120] lg:hidden">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setSidebarOpen(false)} />
+          <div className="absolute inset-y-0 left-0 w-[86%] max-w-[320px] border-r border-white/10 bg-[#070707] shadow-3xl animate-fade-in">
+            {sidebar}
           </div>
+        </div>
       )}
 
-      {/* NODE MODAL */}
-      {showNodeModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/98 backdrop-blur-3xl p-4 sm:p-6">
-             <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto scrollbar-hide p-6 sm:p-14 bg-[#0d0d0d] border border-white/[0.15] rounded-[2.5rem] sm:rounded-[5rem] relative animate-message-in shadow-[0_0_150px_rgba(34,211,238,0.08)]">
-                <button onClick={() => setShowNodeModal(false)} aria-label="Close" className="absolute top-5 right-5 sm:top-14 sm:right-14 text-neutral-600 hover:text-white transition-all text-xl sm:text-3xl active:scale-90 p-3 sm:p-5 bg-white/5 rounded-full">✕</button>
-                <div className="mb-8 sm:mb-12">
-                    <h3 className="text-2xl sm:text-4xl font-bold text-white mb-4 sm:mb-5 tracking-tight pr-12">Injection Portal</h3>
-                    <p className="text-neutral-500 text-[14px] font-normal tracking-wide italic opacity-80">Ground the simulation in verifiable ideological data streams.</p>
+      {/* Main column */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-white/[0.06] bg-[#070707]/90 px-2.5 backdrop-blur-xl sm:px-4">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open sidebar"
+            className="flex h-9 w-9 items-center justify-center rounded-xl text-neutral-400 hover:bg-white/[0.06] hover:text-white lg:hidden"
+          >
+            <IconMenu size={17} />
+          </button>
+
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isProcessing ? 'animate-pulse bg-cyan-400' : isPaused ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+            <div className="min-w-0">
+              <p className="truncate text-[12.5px] font-medium leading-tight text-white">{userProfile.name}</p>
+              <p className="truncate font-mono text-[8.5px] uppercase tracking-[0.16em] text-neutral-500">
+                {isPaused ? 'link paused' : isProcessing ? 'simulating' : isLive ? 'voice link live' : 'link stable'}
+              </p>
+            </div>
+          </div>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              onClick={onOpenSettings}
+              className="hidden items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-neutral-400 transition-colors hover:border-white/20 hover:text-white sm:flex"
+              title="Model settings"
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${accent.dot}`} />
+              <span className="max-w-[130px] truncate">{config.model.split('/').pop()}</span>
+            </button>
+
+            <button
+              onClick={() => setIsPaused((value) => !value)}
+              className={`flex h-9 items-center gap-1.5 rounded-xl border px-2.5 font-mono text-[9px] uppercase tracking-[0.14em] transition-colors ${
+                isPaused
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                  : 'border-white/10 bg-white/[0.03] text-neutral-400 hover:text-white'
+              }`}
+              title={isPaused ? 'Resume' : 'Pause'}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-neutral-600'}`} />
+              <span className="hidden sm:inline">{isPaused ? 'resume' : 'pause'}</span>
+            </button>
+
+            <HeaderMenu
+              items={[
+                { label: 'Export transcript', icon: <IconDownload size={14} />, onClick: exportTranscript },
+                { label: 'Restart session', icon: <IconRefresh size={14} />, onClick: restart },
+                { label: 'New persona', icon: <IconArrowLeft size={14} />, onClick: endSession },
+                { label: 'End session', icon: <IconTrash size={14} />, onClick: endSession, danger: true },
+              ]}
+            />
+          </div>
+        </header>
+
+        {/* Thread */}
+        <main ref={scrollRef} className="relative flex-1 overflow-y-auto">
+          <div className="pointer-events-none absolute inset-0 dot-overlay opacity-[0.025]" />
+          <div className="relative mx-auto w-full max-w-3xl px-3 py-5 sm:px-5 sm:py-7">
+            {messages.length === 0 && !isProcessing && (
+              <div className="flex flex-col items-center py-6 text-center animate-fade-in">
+                <div className="mb-4 h-32 w-32 opacity-90 sm:h-40 sm:w-40">
+                  <PixelConsciousness amplitude={0.05} emotion="neutral" processing={false} />
                 </div>
-                
-                <div className="flex gap-3 sm:gap-5 mb-8 sm:mb-12 bg-white/[0.04] p-2 sm:p-3 rounded-[1.75rem] sm:rounded-[2.5rem] overflow-x-auto scrollbar-hide">
-                   {(['link', 'file', 'text'] as ContextNodeType[]).map(type => (
-                     <button key={type} onClick={() => setNewNodeType(type)} className={`flex-1 min-w-[90px] sm:min-w-[120px] py-4 sm:py-6 rounded-2xl sm:rounded-3xl text-[11px] sm:text-[12px] font-mono font-bold uppercase tracking-widest transition-all ${newNodeType === type ? 'bg-cyan-500 text-black shadow-2xl shadow-cyan-500/50' : 'text-neutral-600 hover:text-neutral-300 hover:bg-white/[0.04]'}`}>{type}</button>
-                   ))}
+                <h2 className="font-display text-lg font-medium tracking-tight text-white sm:text-xl">
+                  {userProfile.name} is listening
+                </h2>
+                <p className="mt-1.5 max-w-sm text-balance text-[12px] leading-relaxed text-neutral-500">
+                  Ask anything. You will get their instinct, their reasoning, and then their answer.
+                </p>
+
+                <div className="mt-6 grid w-full max-w-md gap-1.5">
+                  {SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      onClick={() => {
+                        setInput(suggestion);
+                        textareaRef.current?.focus();
+                      }}
+                      className="group flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-left transition-colors hover:border-cyan-500/30 hover:bg-cyan-500/[0.04]"
+                    >
+                      <IconSpark size={13} className="shrink-0 text-neutral-600 group-hover:text-cyan-400" />
+                      <span className="text-[12px] text-neutral-400 group-hover:text-neutral-200">{suggestion}</span>
+                    </button>
+                  ))}
                 </div>
-                
-                <div className="space-y-8 sm:space-y-12">
-                   <div className="group">
-                        <label className="block text-[10px] font-mono uppercase tracking-[0.6em] text-neutral-600 mb-4 sm:mb-5 ml-2 sm:ml-4 font-bold">Trace_Identifier</label>
-                        <input type="text" value={newNodeTitle} onChange={e => setNewNodeTitle(e.target.value)} placeholder="Simulated ID" className="w-full bg-white/[0.05] border border-white/[0.12] rounded-[1.5rem] sm:rounded-[2rem] px-5 sm:px-10 py-4 sm:py-7 text-white text-base sm:text-lg focus:border-cyan-500/60 outline-none transition-all placeholder-neutral-800 shadow-inner" />
-                   </div>
-                   
-                   <div className="group">
-                        <label className="block text-[10px] font-mono uppercase tracking-[0.6em] text-neutral-600 mb-4 sm:mb-5 ml-2 sm:ml-4 font-bold">Ideological_Stream</label>
-                        {newNodeType === 'file' ? (
-                            <button onClick={() => nodeFileInputRef.current?.click()} className="w-full py-16 sm:py-28 border-2 border-dashed border-white/[0.15] rounded-[2.5rem] sm:rounded-[4rem] text-neutral-600 text-[11px] sm:text-[12px] font-mono uppercase tracking-[0.5em] sm:tracking-[0.6em] hover:border-cyan-500/60 transition-all hover:bg-cyan-500/[0.05] flex flex-col items-center justify-center gap-6 sm:gap-8 group/upload">
-                                <svg className="w-10 h-10 sm:w-14 sm:h-14 opacity-20 group-hover/upload:opacity-50 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="1" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-                                Inject_Persona_Trace
-                            </button>
-                        ) : (
-                            <textarea value={newNodeValue} onChange={e => setNewNodeValue(e.target.value)} placeholder={newNodeType === 'link' ? "https://stream.io/ideological-reference" : "Inject worldview data fragment..."} className="w-full h-48 sm:h-64 bg-white/[0.05] border border-white/[0.12] rounded-[2rem] sm:rounded-[4rem] px-5 sm:px-12 py-5 sm:py-10 text-white text-base sm:text-lg font-light resize-none focus:border-cyan-500/60 outline-none transition-all placeholder-neutral-800 shadow-inner" />
-                        )}
-                   </div>
+              </div>
+            )}
+
+            <div className="space-y-5 sm:space-y-6">
+              {messages.map((message) => (
+                <MessageCard
+                  key={message.id}
+                  message={message}
+                  persona={userProfile.name}
+                  isLastClone={message.id === lastCloneId && !isProcessing}
+                  expanded={expandedIds.has(message.id)}
+                  onToggle={() =>
+                    setExpandedIds((previous) => {
+                      const next = new Set(previous);
+                      if (next.has(message.id)) next.delete(message.id);
+                      else next.add(message.id);
+                      return next;
+                    })
+                  }
+                  onCopy={copy}
+                  onExport={(item) =>
+                    downloadFile(item.content, `duet-${item.role.toLowerCase()}-${item.id}.md`, 'text/markdown')
+                  }
+                  onRegenerate={regenerate}
+                  onOpenImage={setSelectedImage}
+                  onRetry={retryLast}
+                />
+              ))}
+
+              {isProcessing && <DraftCard state={draft} />}
+
+              {error && !isProcessing && (
+                <div className="flex items-start gap-2.5 rounded-xl border border-red-500/25 bg-red-500/[0.05] px-3.5 py-3 text-[12px] leading-relaxed text-red-300">
+                  <IconWarn size={15} className="mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <p>{error}</p>
+                    <button
+                      onClick={onOpenSettings}
+                      className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-red-200 underline underline-offset-4 hover:text-white"
+                    >
+                      check connection
+                    </button>
+                  </div>
                 </div>
-                
-                <button 
-                  onClick={() => newNodeType !== 'file' && addContextNode(newNodeType, newNodeTitle, newNodeValue)} 
-                  disabled={newNodeType !== 'file' && !newNodeValue.trim()} 
-                  className="w-full mt-8 sm:mt-14 py-7 sm:py-10 bg-gradient-to-br from-cyan-600 to-cyan-400 text-black font-bold uppercase tracking-[0.4em] sm:tracking-[0.6em] rounded-[2.5rem] sm:rounded-[4rem] shadow-3xl active:scale-95 transition-all text-[11px] sm:text-[12px] disabled:opacity-20 hover:brightness-110"
+              )}
+            </div>
+          </div>
+        </main>
+
+        {/* Composer */}
+        <div className="shrink-0 border-t border-white/[0.06] bg-[#050505]/95 px-2.5 pb-2.5 pt-2.5 backdrop-blur-xl sm:px-4 sm:pb-4">
+          <div className="mx-auto w-full max-w-3xl">
+            {pendingAttachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {pendingAttachments.map((attachment, index) => (
+                  <div
+                    key={`${attachment.name}-${index}`}
+                    className="group relative h-14 w-14 overflow-hidden rounded-lg border border-white/10"
+                  >
+                    <img
+                      src={`data:${attachment.mimeType};base64,${attachment.data}`}
+                      alt={attachment.name || 'attachment'}
+                      className="h-full w-full object-cover"
+                    />
+                    <button
+                      onClick={() =>
+                        setPendingAttachments((previous) => previous.filter((_, itemIndex) => itemIndex !== index))
+                      }
+                      aria-label="Remove attachment"
+                      className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/80 text-neutral-300 hover:text-white"
+                    >
+                      <IconX size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div
+              className={`flex items-end gap-1.5 rounded-2xl border bg-[#0b0b0b] p-1.5 transition-colors ${
+                isPaused
+                  ? 'border-amber-500/25 opacity-70'
+                  : 'border-white/10 focus-within:border-cyan-500/40'
+              }`}
+            >
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isPaused || isProcessing}
+                aria-label="Attach image"
+                title="Attach image"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-neutral-500 transition-colors hover:bg-white/[0.06] hover:text-cyan-300 disabled:opacity-30"
+              >
+                <IconPlus size={17} />
+              </button>
+
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(event) => {
+                  setInput(event.target.value);
+                  const element = event.target;
+                  element.style.height = 'auto';
+                  element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    void send();
+                  }
+                }}
+                rows={1}
+                placeholder={isPaused ? 'Link paused — resume to speak' : `Message ${userProfile.name}…`}
+                disabled={isPaused}
+                aria-label="Message"
+                className="max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-1 py-2 text-[14px] leading-relaxed text-white placeholder-neutral-600 focus:outline-none disabled:opacity-50"
+              />
+
+              <button
+                onClick={isLive ? stopLive : startLive}
+                disabled={isPaused}
+                aria-label="Voice link"
+                title={isLive ? 'Stop voice' : 'Start voice link (Gemini)'}
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors disabled:opacity-30 ${
+                  isLive
+                    ? 'animate-pulse bg-red-500/20 text-red-400'
+                    : 'text-neutral-500 hover:bg-white/[0.06] hover:text-cyan-300'
+                }`}
+              >
+                <IconMic size={16} />
+              </button>
+
+              {isProcessing ? (
+                <button
+                  onClick={stop}
+                  aria-label="Stop generating"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white transition-colors hover:bg-white/20"
                 >
-                  {newNodeType === 'link' ? 'Initiate_Deep_Analysis' : 'Confirm_Injection'}
+                  <IconStop size={14} />
                 </button>
-                <input type="file" ref={nodeFileInputRef} onChange={(e) => handleFileUpload(e, true)} className="hidden" />
-             </div>
+              ) : (
+                <button
+                  onClick={() => void send()}
+                  disabled={isPaused || (!input.trim() && pendingAttachments.length === 0)}
+                  aria-label="Send message"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-cyan-400 text-black transition-all hover:bg-cyan-300 active:scale-95 disabled:opacity-25"
+                >
+                  <IconSend size={16} />
+                </button>
+              )}
+            </div>
+
+            <div className="mt-1.5 flex items-center justify-between px-1 font-mono text-[8.5px] uppercase tracking-[0.14em] text-neutral-700">
+              <span className="truncate">
+                enter to send · shift+enter newline
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span className={`h-1 w-1 rounded-full ${accent.dot}`} />
+                {meta.short}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Image lightbox */}
+      <Modal open={!!selectedImage} onClose={() => setSelectedImage(null)} wide className="bg-black/95">
+        {selectedImage && (
+          <div className="flex flex-col items-center gap-4 p-4 sm:p-6">
+            <img
+              src={`data:${selectedImage.mimeType};base64,${selectedImage.data}`}
+              alt={selectedImage.name || 'visualisation'}
+              className="max-h-[68vh] w-auto rounded-xl border border-white/10 object-contain"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                icon={<IconDownload size={14} />}
+                onClick={() => {
+                  const binary = atob(selectedImage.data);
+                  const bytes = new Uint8Array(binary.length);
+                  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+                  const url = URL.createObjectURL(new Blob([bytes], { type: selectedImage.mimeType }));
+                  const anchor = document.createElement('a');
+                  anchor.href = url;
+                  anchor.download = selectedImage.name || 'duet-image.png';
+                  anchor.click();
+                  setTimeout(() => URL.revokeObjectURL(url), 1000);
+                }}
+              >
+                Download
+              </Button>
+              <Button variant="ghost" onClick={() => setSelectedImage(null)}>
+                Close
+              </Button>
+            </div>
           </div>
         )}
+      </Modal>
 
-      <input type="file" ref={fileInputRef} onChange={(e) => handleFileUpload(e)} className="hidden" accept="image/*,.pdf,.txt" />
+      {/* Node injection */}
+      <Modal open={nodeModal} onClose={() => setNodeModal(false)} labelledBy="node-title">
+        <div className="p-5 sm:p-6">
+          <h3 id="node-title" className="font-display text-xl font-semibold text-white">
+            Inject context
+          </h3>
+          <p className="mt-1 text-[12px] leading-relaxed text-neutral-500">
+            Give the clone something to read. Links are summarised, text is used verbatim.
+          </p>
 
-      <style>{`
-        @keyframes message-in { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-        .animate-message-in { animation: message-in 1.0s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        .animate-fade-in { animation: fade-in 0.8s ease-out forwards; }
-        .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .cursor-zoom-in { cursor: zoom-in; }
-      `}</style>
+          <div className="mt-4 grid grid-cols-3 gap-1.5 rounded-xl border border-white/[0.06] bg-black/40 p-1.5">
+            {(['link', 'text', 'file'] as ContextNodeType[]).map((type) => {
+              const Icon = type === 'link' ? IconLink : type === 'text' ? IconText : IconFile;
+              return (
+                <button
+                  key={type}
+                  onClick={() => setNodeType(type)}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 font-mono text-[10px] uppercase tracking-[0.14em] transition-colors ${
+                    nodeType === type ? 'bg-white/[0.09] text-white' : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  <Icon size={13} /> {type}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <Field label="Label" hint={<span className="font-mono text-[9px] text-neutral-600">optional</span>}>
+              <input
+                value={nodeTitle}
+                onChange={(event) => setNodeTitle(event.target.value)}
+                placeholder={nodeType === 'link' ? 'Fetched automatically' : 'e.g. Founder letter 2019'}
+                className={inputClass}
+              />
+            </Field>
+
+            {nodeType === 'file' ? (
+              <button
+                onClick={() => nodeFileInputRef.current?.click()}
+                className="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-white/15 py-10 text-neutral-500 transition-colors hover:border-cyan-500/40 hover:bg-cyan-500/[0.03] hover:text-cyan-300"
+              >
+                <IconFile size={20} />
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em]">choose a file</span>
+              </button>
+            ) : (
+              <Field label={nodeType === 'link' ? 'URL' : 'Content'}>
+                {nodeType === 'link' ? (
+                  <input
+                    value={nodeValue}
+                    onChange={(event) => setNodeValue(event.target.value)}
+                    placeholder="https://…"
+                    className={`${inputClass} font-mono`}
+                  />
+                ) : (
+                  <textarea
+                    value={nodeValue}
+                    onChange={(event) => setNodeValue(event.target.value)}
+                    placeholder="Paste a passage, a belief, a manifesto…"
+                    className={`${inputClass} h-36 resize-none leading-relaxed`}
+                  />
+                )}
+              </Field>
+            )}
+          </div>
+
+          <div className="mt-5 flex gap-2">
+            <Button
+              variant="primary"
+              full
+              disabled={nodeType !== 'file' && !nodeValue.trim()}
+              onClick={() => nodeType !== 'file' && addContextNode(nodeType, nodeTitle, nodeValue)}
+              icon={nodeType === 'link' ? <IconGlobe size={14} /> : <IconZap size={14} />}
+            >
+              {nodeType === 'link' ? 'Fetch and add' : 'Add node'}
+            </Button>
+            <Button variant="ghost" onClick={() => setNodeModal(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleAttach}
+        className="hidden"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
+      />
+      <input type="file" ref={nodeFileInputRef} onChange={handleNodeFile} className="hidden" />
     </div>
   );
 };

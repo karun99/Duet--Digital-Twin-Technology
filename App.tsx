@@ -1,111 +1,164 @@
-
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Onboarding } from './components/Onboarding';
 import { Simulation } from './components/Simulation';
-import { OpenRouterGate } from './components/OpenRouterGate';
-import { getStoredApiKey, clearApiKey } from './services/openrouter';
-import { UserProfile } from './types';
+import { ProviderGate } from './components/ProviderGate';
+import { Modal, ToastStack } from './components/ui';
+import { IconKey, IconSettings } from './components/icons';
+import { useLlmConfig, isConnected, PROVIDERS } from './services/llm';
+import { ACCENT_CLASSES } from './services/llm/providers';
+import { clearSession } from './services/session';
+import type { Toast, ToastKind, UserProfile } from './types';
+
+const PROFILE_KEY = 'duet.profile.v1';
+
+function loadProfile(): UserProfile | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as UserProfile;
+    return parsed?.name && parsed?.bio ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveProfile(profile: UserProfile | null): void {
+  try {
+    if (profile) localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+    else localStorage.removeItem(PROFILE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 function App() {
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [linked, setLinked] = useState<boolean>(() => !!getStoredApiKey() || !!process.env.API_KEY);
-  const [hasUserKey, setHasUserKey] = useState<boolean>(() => !!getStoredApiKey());
+  const config = useLlmConfig();
+  const meta = PROVIDERS[config.provider];
+  const accent = ACCENT_CLASSES[meta.accent];
 
-  const handleForgetKey = () => {
-    clearApiKey();
-    setHasUserKey(false);
-    setUserProfile(null);
-    setLinked(false);
+  const [profile, setProfile] = useState<UserProfile | null>(() => loadProfile());
+  const [connected, setConnected] = useState<boolean>(() => isConnected());
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const pushToast = useCallback((kind: ToastKind, title: string, detail?: string) => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setToasts((previous) => [...previous.slice(-2), { id, kind, title, detail }]);
+    setTimeout(() => {
+      setToasts((previous) => previous.filter((toast) => toast.id !== id));
+    }, kind === 'error' ? 9000 : 5000);
+  }, []);
+
+  // The config store is the source of truth for "can we talk to a model".
+  useEffect(() => {
+    setConnected(isConnected());
+  }, [config]);
+
+  const startSession = (next: UserProfile) => {
+    saveProfile(next);
+    setProfile(next);
   };
 
+  const endSession = () => {
+    clearSession();
+    saveProfile(null);
+    setProfile(null);
+  };
+
+  if (!connected) {
+    return (
+      <>
+        <ProviderGate
+          mode="connect"
+          onReady={() => {
+            setConnected(true);
+            pushToast('success', 'Model linked', `${meta.name} · ${config.model}`);
+          }}
+        />
+        <ToastStack toasts={toasts} onDismiss={(id) => setToasts((previous) => previous.filter((t) => t.id !== id))} />
+      </>
+    );
+  }
+
   return (
-    <div className="fixed inset-0 bg-black text-white overflow-hidden flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
-      
-      {/* Background Ambience - Unified and subtle */}
-      <div className="fixed inset-0 pointer-events-none z-0">
-        <div className="absolute top-[-15%] left-[-10%] w-[50vw] h-[50vw] bg-cyan-900/10 rounded-full blur-[160px] animate-pulse-slow"></div>
-        <div className="absolute bottom-[-15%] right-[-10%] w-[60vw] h-[60vw] bg-purple-900/10 rounded-full blur-[180px] animate-pulse-slow [animation-delay:2s]"></div>
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.08] mix-blend-overlay"></div>
-        <div className="absolute inset-0 opacity-[0.02]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '100px 100px' }}></div>
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#030303] text-neutral-200">
+      {/* Ambient background */}
+      <div className="pointer-events-none fixed inset-0 z-0">
+        <div className="absolute left-[-12%] top-[-18%] h-[46vw] w-[46vw] rounded-full bg-cyan-900/[0.09] blur-[150px]" />
+        <div className="absolute bottom-[-20%] right-[-12%] h-[52vw] w-[52vw] rounded-full bg-violet-900/[0.09] blur-[170px]" />
+        <div className="noise-overlay absolute inset-0 opacity-[0.035] mix-blend-overlay" />
+        <div className="grid-overlay absolute inset-0 opacity-[0.025]" />
       </div>
 
-      {!linked && <OpenRouterGate onReady={() => setLinked(true)} />}
-
-      {linked && (
-      <>
-      {/* Header (Desktop Only / Hide when simulation is on mobile if needed) */}
-      {!userProfile && (
-        <header className="relative z-50 h-16 sm:h-20 safe-top px-4 sm:px-8 md:px-12 flex justify-between items-center border-b border-white/[0.03] backdrop-blur-3xl shrink-0 bg-black/20">
-          <div className="flex items-center gap-3 sm:gap-5 group cursor-default min-w-0">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 bg-gradient-to-br from-cyan-400 to-purple-600 rounded-xl flex items-center justify-center shadow-2xl shadow-cyan-500/30 group-hover:scale-110 transition-transform duration-500">
-              <span className="text-black font-black text-base sm:text-lg">D</span>
-            </div>
-            <div className="flex flex-col min-w-0">
-                <h1 className="text-base sm:text-lg font-bold tracking-tight uppercase leading-none truncate">
-                  DUET <span className="text-neutral-600 font-light ml-1 sm:ml-2">SYSTEM</span>
+      {!profile ? (
+        <>
+          <header className="relative z-20 flex h-16 shrink-0 items-center justify-between border-b border-white/[0.06] bg-[#050505]/70 px-3 backdrop-blur-xl sm:px-6">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-violet-600 shadow-lg shadow-cyan-500/20">
+                <span className="font-display text-sm font-bold text-black">D</span>
+              </div>
+              <div className="min-w-0">
+                <h1 className="truncate font-display text-[14px] font-semibold leading-none tracking-tight text-white">
+                  Duet
                 </h1>
-                <span className="text-[8px] font-mono text-cyan-500/40 tracking-[0.25em] sm:tracking-[0.5em] mt-1 uppercase truncate">Parallel_Consciousness_Framework</span>
+                <p className="mt-1 truncate font-mono text-[8px] uppercase tracking-[0.24em] text-neutral-600">
+                  parallel consciousness
+                </p>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-4 sm:gap-8 shrink-0">
-            <div className="hidden lg:flex items-center gap-6">
-                <div className="flex flex-col items-end">
-                    <span className="text-[9px] font-mono text-cyan-500/60 uppercase tracking-widest">Global_Status</span>
-                    <span className="text-[10px] font-bold text-white uppercase tracking-tighter">Synchronized</span>
-                </div>
-                <div className="w-px h-6 bg-white/10"></div>
-                <div className="flex flex-col items-end">
-                    <span className="text-[9px] font-mono text-purple-500/60 uppercase tracking-widest">Network</span>
-                    <span className="text-[10px] font-bold text-white uppercase tracking-tighter">Secure_Link</span>
-                </div>
-            </div>
-            {hasUserKey && (
+
+            <div className="flex items-center gap-1.5">
               <button
-                onClick={handleForgetKey}
-                className="text-[10px] font-mono uppercase tracking-[0.25em] text-neutral-500 hover:text-cyan-400 border border-white/10 hover:border-cyan-500/40 px-5 py-2.5 rounded-full transition-all"
-                title="Sign out and use a different OpenRouter key"
+                onClick={() => setSettingsOpen(true)}
+                className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-neutral-400 transition-colors hover:border-white/20 hover:text-white"
+                title="Model settings"
               >
-                Change_Key
+                <span className={`h-1.5 w-1.5 rounded-full ${accent.dot}`} />
+                <span className="hidden max-w-[150px] truncate sm:inline">{config.model.split('/').pop()}</span>
+                <span className="sm:hidden">{meta.short}</span>
               </button>
-            )}
-          </div>
-        </header>
-      )}
-
-      {/* Main Content Area */}
-      <main className="relative z-10 flex-1 flex flex-col h-full min-h-0">
-        {!userProfile ? (
-          <div className="flex-1 flex items-center justify-center p-6 md:p-12 overflow-y-auto scrollbar-hide">
-            <div className="w-full flex justify-center animate-fade-in">
-              <Onboarding onComplete={setUserProfile} />
+              <button
+                onClick={() => setSettingsOpen(true)}
+                aria-label="Settings"
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-neutral-400 transition-colors hover:border-white/20 hover:text-white"
+              >
+                <IconSettings size={16} />
+              </button>
             </div>
-          </div>
-        ) : (
-          <Simulation 
-            userProfile={userProfile} 
-            onBack={() => setUserProfile(null)} 
+          </header>
+
+          <main className="relative z-10 flex-1 overflow-y-auto px-3 pb-8 pt-2 sm:px-6">
+            <Onboarding onComplete={startSession} onOpenSettings={() => setSettingsOpen(true)} />
+          </main>
+        </>
+      ) : (
+        <div className="relative z-10 h-full min-h-0">
+          <Simulation
+            userProfile={profile}
+            onBack={endSession}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onToast={pushToast}
           />
-        )}
-      </main>
-      </>
+        </div>
       )}
 
-      <style>{`
-        @keyframes pulse-slow {
-          0%, 100% { transform: scale(1); opacity: 0.1; }
-          50% { transform: scale(1.05); opacity: 0.15; }
-        }
-        .animate-pulse-slow {
-          animation: pulse-slow 10s ease-in-out infinite;
-        }
-        .animate-fade-in {
-            animation: fade-in 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-        @keyframes fade-in {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
+      <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} labelledBy="settings-title">
+        <div className="border-b border-white/[0.06] px-5 py-4 sm:px-7">
+          <h2 id="settings-title" className="font-display text-lg font-semibold tracking-tight text-white">
+            Connection
+          </h2>
+          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-500">
+            <IconKey size={12} />
+            Keys are stored in this browser and sent only to the provider you choose.
+          </p>
+        </div>
+        <ProviderGate mode="settings" onClose={() => setSettingsOpen(false)} />
+      </Modal>
+
+      <ToastStack
+        toasts={toasts}
+        onDismiss={(id) => setToasts((previous) => previous.filter((toast) => toast.id !== id))}
+      />
     </div>
   );
 }

@@ -53,7 +53,26 @@ export interface GroundingSource {
   uri: string;
 }
 
+export type GroundedSource = GroundingSource;
+
 export interface SearchResult {
   bio: string;
   sources: GroundingSource[];
+}
+
+/** A saved conversation, persisted locally so a reload keeps the thread. */
+export interface DuetSession {
+  profile: UserProfile;
+  messages: AgentMessage[];
+  contextNodes: ContextNode[];
+  updatedAt: number;
+}
+
+export type ToastKind = 'error' | 'success' | 'info';
+
+export interface Toast {
+  id: string;
+  kind: ToastKind;
+  title: string;
+  detail?: string;
 }

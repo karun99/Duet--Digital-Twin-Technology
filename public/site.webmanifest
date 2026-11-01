@@ -1,0 +1,12 @@
+{
+  "name": "Duet — Digital Twin Technology",
+  "short_name": "Duet",
+  "description": "Build a parallel consciousness from any model provider.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

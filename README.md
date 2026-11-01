@@ -75,6 +75,23 @@ npm run build      # typecheck + vite build → dist/
 Deploy to Vercel (or any static host) with `npm run build` and `dist/` as the
 output directory — `vercel.json` is already configured.
 
+### Hugging Face Space
+
+Live: **<https://saikarun-duet-digital-twin.static.hf.space>**
+(Space repo: <https://huggingface.co/spaces/saikarun/duet-digital-twin>)
+
+Static Spaces serve files from the repo root, so publish the contents of
+`dist/` — not the folder itself — alongside a `README.md` whose front matter
+declares `sdk: static`:
+
+```bash
+npm run build
+cp -r dist/* /tmp/duet-space/          # index.html must sit at the root
+hf upload saikarun/duet-digital-twin /tmp/duet-space . --repo-type space
+```
+
+The Space is rebuilt on every push to its repo; the app itself is unchanged.
+
 ---
 
 ## How it works

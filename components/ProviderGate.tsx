@@ -21,6 +21,7 @@ import { ACCENT_CLASSES } from '../services/llm/providers';
 import { Button, Field, Spinner, inputClass } from './ui';
 import {
   IconCheck,
+  IconFile,
   IconGlobe,
   IconKey,
   IconLayers,
@@ -484,6 +485,15 @@ export const ProviderGate: React.FC<ProviderGateProps> = ({ mode = 'connect', on
           <span className="inline-flex items-center gap-1.5">
             <IconGlobe size={12} /> no server, no account
           </span>
+          <a
+            href="https://doi.org/10.5281/zenodo.23831022"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 transition-colors hover:text-cyan-400"
+            title="Duet: Agentic AI and the Construction of Parallel Consciousness"
+          >
+            <IconFile size={12} /> paper · doi
+          </a>
         </div>
       </div>
     </div>

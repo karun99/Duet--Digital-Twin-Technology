@@ -15,6 +15,11 @@ You watch all three streams form live, and can re-open the reasoning of any past
 turn. Optional `[[SKETCH]]` blocks become diagrams when an image model is
 available.
 
+A local **MAS operating protocol** — Six Hats, EMOJA, DUNCE, KUNDALINI and
+JATAKA — checks tone, risk and evidence on every reply. Open **Protocol** to set
+PI consent, choose a retrieval mode, inspect the guard chips, or read the
+DUNCE/audit logs.
+
 > Duet started as a shared first project. The memory of building it is part of
 > what it is.
 
@@ -129,7 +134,10 @@ services/
     config.ts      localStorage config, host keys, reactive store
     client.ts      transport: SSE streaming, vision, model listing, validation
   duet.ts          persona lookup, link ingestion, avatars, clone chat
+  mas.ts           operating protocol, guards, KB/PI addresses, DUNCE log
   session.ts       local session persistence + markdown export
+components/
+  MasPanel.tsx     protocol controls, PI consent, DUNCE and audit views
 ```
 
 Design decisions worth knowing:
@@ -148,6 +156,53 @@ Design decisions worth knowing:
   link to read).
 - **Compiled CSS.** Tailwind is built at compile time — no CDN, no runtime
   style generation.
+
+---
+
+## Operating protocol (MAS)
+
+Open **Protocol** from the header, the sidebar, or the onboarding screen. The
+layer sits above the persona prompt and wraps every reply in a local governor:
+
+- **KUNDALINI (Blue Hat)** owns the agenda, mode, stage and PI consent.
+- **EMOJA (Red Hat)** owns tone. It can veto and rewrite shouting or hostility.
+- **DUNCE** keeps the error/correction log and retrieves past failures before
+  the next turn.
+- **JATAKA** checks G1 intention, G2 non-harm, G3 truthful speech, G4
+  non-attachment, G5 right relationship and G6 consequence memory.
+- **SIX HATS** resolve internally; `[[META]]` carries the synthesis rather than
+  printing every hat.
+
+Every reply gets a compact governor strip under it: mode, grounded state, risk,
+verdict, EMOJA status and the six guard chips. The raw `[[GOVERNOR]]` block is
+parsed out before display.
+
+### Modes
+
+| Mode | Behaviour |
+| --- | --- |
+| `SINGLE` | Normal answer, grounded in injected KB nodes when useful. |
+| `KB-PRIMARY` | KB is the only permitted source. No entry means `[KB_MISS]` and a stop before the model is called. |
+| `REFRESH` | Propose a correction with evidence and wait for `ACCEPT`; never silently rewrite. |
+| `SITEMAP` / `INDEX` | Declared only. This client has no live crawler, so it never claims a crawl. |
+
+### What is actually enforced
+
+| Capability | Status |
+| --- | --- |
+| PI consent gate, per-field approval, audit log | **Enforced** in the browser |
+| `kb://` addresses for injected nodes | **Enforced** (FNV-1a hash, `v=1`) |
+| `KB-PRIMARY` stops on no KB | **Enforced** before the request |
+| JATAKA G1–G6 heuristics | **Enforced** on the returned text |
+| EMOJA tone veto and rewrite | **Enforced** for shouting/hostility patterns |
+| DUNCE log + stage escalation | **Enforced** in `localStorage` |
+| G2 human approval gate | **Escalates** — it never executes an action |
+| SITEMAP / INDEX crawling | **Declared** — no crawler exists |
+| `REFRESH` write-back | **Policy** — no persistent KB store to write to |
+| Six Hats deliberation | **Prompt-level** — not a hard firewall |
+
+`kb://`, `pi://` and `jataka://` are address conventions, not a database. There
+is no server-side PI, and the guard checks are heuristics over the reply text.
 
 ---
 

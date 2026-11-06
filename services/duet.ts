@@ -2,9 +2,20 @@
 /// generation and the two-stream clone chat. All model calls go through the
 /// provider layer, so any supported backend works here unchanged.
 
-import { AgentMessage, AgentRole, Attachment, ContextNode, GroundedSource, SearchResult, UserProfile } from '../types';
+import {
+  AgentMessage,
+  AgentRole,
+  Attachment,
+  ContextNode,
+  GroundedSource,
+  GovernorTrace,
+  MasState,
+  SearchResult,
+  UserProfile,
+} from '../types';
 import { chat, complete, getApiKey, getConfig, providerMeta, type ContentPart } from './llm';
 import { JATAKA_GUARDRAIL_BLOCK } from '../constants';
+import { buildKbEntries, buildMasPrompt, governReply } from './mas';
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const TEXT_MODEL = 'gemini-2.5-flash';
@@ -342,6 +353,7 @@ export interface CloneResponse {
   metaThought: string;
   finalResponse: string;
   sketchUrl?: string;
+  governor?: GovernorTrace;
 }
 
 export interface CloneStreamState {
@@ -354,9 +366,15 @@ export interface CloneStreamState {
 export interface CloneChatOptions {
   onDelta?: (raw: string, parsed: CloneStreamState) => void;
   signal?: AbortSignal;
+  mas?: MasState;
+  kb?: ContextNode[];
 }
 
-function buildSystemInstruction(userProfile: UserProfile, extraContext: string): string {
+function buildSystemInstruction(
+  userProfile: UserProfile,
+  extraContext: string,
+  masBlock: string
+): string {
   return `YOU ARE NO LONGER AN AI. You are a high-fidelity simulation of ${userProfile.name}'s parallel consciousness.
 
 OBJECTIVE
@@ -383,11 +401,15 @@ If an abstract visual would carry the idea better than words, end the reply with
 [[SKETCH]] a precise visual description of the diagram/blueprint [[/SKETCH]]
 Use it sparingly — at most once every few turns.
 
-${JATAKA_GUARDRAIL_BLOCK}`;
+${JATAKA_GUARDRAIL_BLOCK}${masBlock ? `\n\n${masBlock}` : ''}`;
+}
+
+function stripGovernorBlock(raw: string): string {
+  return (raw ?? '').replace(/\[\[GOVERNOR\]\][\s\S]*?(?:\[\[\/GOVERNOR\]\]|$)/gi, '').trimEnd();
 }
 
 export function parseCloneStream(raw: string): CloneStreamState {
-  const text = raw ?? '';
+  const text = stripGovernorBlock(raw);
   const primaryStart = text.indexOf('[[PRIMARY]]');
   const metaStart = text.indexOf('[[META]]');
   const responseStart = text.indexOf('[[RESPONSE]]');
@@ -416,12 +438,13 @@ export function parseCloneStream(raw: string): CloneStreamState {
 }
 
 function parseCloneText(text: string): { primary: string; meta: string; response: string; sketch?: string } {
-  const parsed = parseCloneStream(text);
-  const sketchMatch = text.match(/\[\[SKETCH\]\]([\s\S]*?)(?:\[\[\/SKETCH\]\]|$)/);
+  const clean = stripGovernorBlock(text);
+  const parsed = parseCloneStream(clean);
+  const sketchMatch = clean.match(/\[\[SKETCH\]\]([\s\S]*?)(?:\[\[\/SKETCH\]\]|$)/);
   return {
     primary: parsed.primary || 'Synthesizing worldview…',
     meta: parsed.meta || 'Analyzing perception delta…',
-    response: parsed.response || text.replace(/\[\[[^\]]+\]\]/g, '').trim(),
+    response: parsed.response || clean.replace(/\[\[[^\]]+\]\]/g, '').trim(),
     sketch: sketchMatch?.[1]?.trim() || undefined,
   };
 }
@@ -448,6 +471,13 @@ export const chatWithClone = async (
   contextNodes?: ContextNode[],
   options: CloneChatOptions = {}
 ): Promise<CloneResponse> => {
+  const kbEntries = buildKbEntries(contextNodes);
+  if (options.mas?.enabled && options.mas.mode === 'KB-PRIMARY' && kbEntries.length === 0) {
+    throw new Error(
+      '[KB_MISS] KB-PRIMARY mode needs at least one ready KB entry. Inject a link or text node, or switch the protocol mode.'
+    );
+  }
+
   let extraContext = '';
   if (contextNodes && contextNodes.length > 0) {
     extraContext = contextNodes
@@ -459,7 +489,11 @@ export const chatWithClone = async (
       .join('\n');
   }
 
-  const systemInstruction = buildSystemInstruction(userProfile, extraContext);
+  const systemInstruction = buildSystemInstruction(
+    userProfile,
+    extraContext,
+    buildMasPrompt(options.mas, userProfile, contextNodes)
+  );
 
   const messages = history
     .filter((msg) => msg.role === AgentRole.USER || msg.role === AgentRole.CLONE)
@@ -505,6 +539,14 @@ export const chatWithClone = async (
   });
 
   const parsed = parseCloneText(raw);
+  const governed = options.mas?.enabled
+    ? governReply({
+        userText: textPart.text,
+        reply: parsed.response,
+        state: options.mas,
+        nodes: contextNodes,
+      })
+    : undefined;
 
   let sketchUrl: string | undefined;
   if (parsed.sketch) {
@@ -518,8 +560,9 @@ export const chatWithClone = async (
   return {
     primaryThought: parsed.primary,
     metaThought: parsed.meta,
-    finalResponse: parsed.response,
+    finalResponse: governed?.text ?? parsed.response,
     sketchUrl,
+    governor: governed?.trace,
   };
 };
 

@@ -24,9 +24,78 @@ export interface ContextNode {
   type: ContextNodeType;
   title: string;
   content: string; // URL for links, base64 for files, raw text for text
+  sourceUrl?: string; // original link, kept even after content is summarised
   mimeType?: string;
   timestamp: number;
   status?: 'idle' | 'fetching' | 'ready' | 'error';
+}
+
+/* -------------------------------------------------------------------------- */
+/* MAS operating protocol                                                     */
+/* -------------------------------------------------------------------------- */
+
+export type MasMode = 'SINGLE' | 'KB-PRIMARY' | 'REFRESH' | 'SITEMAP' | 'INDEX';
+export type MasStage = 0 | 1 | 2;
+export type PiSection = 'identity' | 'persona' | 'context' | 'history' | 'preferences';
+
+export interface PiField {
+  id: string;
+  section: PiSection;
+  value: string;
+  approvedAt: number;
+}
+
+export interface AuditEntry {
+  id: string;
+  at: number;
+  action: 'read' | 'write' | 'delete' | 'disable' | 'enable';
+  field: string;
+  purpose: string;
+}
+
+export interface DunceEntry {
+  id: string;
+  at: number;
+  kind: 'turn' | 'error' | 'correction';
+  summary: string;
+  correction?: string;
+  confidenceDelta?: number;
+  kbUrls?: string[];
+  piUrls?: string[];
+  jataka?: string[];
+}
+
+export interface MasState {
+  enabled: boolean;
+  piConsent: boolean;
+  mode: MasMode;
+  stage: MasStage;
+  piFields: PiField[];
+  audit: AuditEntry[];
+  dunce: DunceEntry[];
+  updatedAt: number;
+}
+
+export type GuardId = 'G1' | 'G2' | 'G3' | 'G4' | 'G5' | 'G6';
+export type GuardStatus = 'PASS' | 'FAIL' | 'ESCALATE' | 'DOWNGRADE' | 'FLAG' | 'LOGGED';
+
+export interface GuardCheck {
+  id: GuardId;
+  name: string;
+  status: GuardStatus;
+  note: string;
+}
+
+export interface GovernorTrace {
+  mode: MasMode;
+  grounded: 'YES' | 'PARTIAL' | 'NO';
+  checks: GuardCheck[];
+  verdict: 'PROCEED' | 'HALT' | 'ESCALATE';
+  risk: 'LOW' | 'MEDIUM' | 'HIGH';
+  emoja: { status: 'PASS' | 'VETO'; note: string };
+  kbUrls: string[];
+  piUrls: string[];
+  at: number;
 }
 
 export interface AgentMessage {
@@ -36,6 +105,7 @@ export interface AgentMessage {
   timestamp: number;
   internalThoughts?: InternalThought[]; // For CLONE messages, contains the Duet process
   attachments?: Attachment[];
+  governor?: GovernorTrace; // JATAKA / EMOJA result for this reply
   isTyping?: boolean; // UI state
 }
 

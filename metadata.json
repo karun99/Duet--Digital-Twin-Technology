@@ -1,6 +1,6 @@
 {
   "name": "Duet: Agentic AI & Parallel Consciousness",
-  "description": "An experimental agentic AI framework that simulates dual-stream consciousness. A Primary Agent (Executive) and a Meta-Agent (Reflective) co-evolve strategies based on user personas, utilizing real-time web grounding for context.",
+  "description": "A digital-twin agent that reconstructs a person's worldview and answers in three streams (instinct, reasoning, voice). Replies are governed by a local MAS layer: Six Hats, EMOJA tone veto, DUNCE failure memory, KUNDALINI staging, and JATAKA guardrails.",
   "requestFramePermissions": [
     "microphone"
   ]

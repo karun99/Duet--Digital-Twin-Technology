@@ -6,13 +6,16 @@ import {
   Attachment,
   ContextNode,
   ContextNodeType,
+  GovernorTrace,
+  MasState,
   UserProfile,
 } from '../types';
 import { chatWithClone, fetchLinkContent, type CloneStreamState } from '../services/duet';
 import { getApiKey, PROVIDERS, useLlmConfig } from '../services/llm';
 import { ACCENT_CLASSES } from '../services/llm/providers';
 import { clearSession, downloadFile, loadSession, saveSession, transcriptMarkdown } from '../services/session';
-import { Button, Field, Modal, inputClass } from './ui';
+import { buildMasBrief, recordError, recordTurn } from '../services/mas';
+import { Badge, Button, Field, Modal, inputClass } from './ui';
 import {
   IconArrowLeft,
   IconChevronDown,
@@ -28,6 +31,7 @@ import {
   IconRefresh,
   IconSend,
   IconSettings,
+  IconShield,
   IconSpark,
   IconStop,
   IconText,
@@ -41,6 +45,9 @@ interface SimulationProps {
   userProfile: UserProfile;
   onBack: () => void;
   onOpenSettings: () => void;
+  onOpenProtocol: () => void;
+  mas: MasState;
+  onMasChange: (next: MasState) => void;
   onToast: (kind: 'error' | 'success' | 'info', title: string, detail?: string) => void;
 }
 
@@ -244,6 +251,81 @@ interface MessageProps {
   onRetry?: () => void;
 }
 
+const GUARD_CHIP: Record<string, string> = {
+  PASS: 'border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-300/80',
+  LOGGED: 'border-white/10 bg-white/[0.03] text-neutral-500',
+  DOWNGRADE: 'border-amber-500/25 bg-amber-500/[0.07] text-amber-300',
+  FLAG: 'border-amber-500/25 bg-amber-500/[0.07] text-amber-300',
+  FAIL: 'border-red-500/25 bg-red-500/[0.07] text-red-300',
+  ESCALATE: 'border-red-500/30 bg-red-500/[0.09] text-red-300',
+};
+
+const GovernorStrip: React.FC<{ trace: GovernorTrace }> = ({ trace }) => {
+  const [open, setOpen] = useState(false);
+  const issues = trace.checks.filter((check) => check.status !== 'PASS' && check.status !== 'LOGGED');
+
+  return (
+    <div className="mt-3 rounded-xl border border-white/[0.07] bg-white/[0.015] px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-mono text-[8px] uppercase tracking-[0.22em] text-neutral-600">governor</span>
+        <Badge tone="neutral">{trace.mode}</Badge>
+        <Badge tone={trace.grounded === 'YES' ? 'green' : trace.grounded === 'PARTIAL' ? 'amber' : 'neutral'}>
+          grounded {trace.grounded.toLowerCase()}
+        </Badge>
+        <Badge tone={trace.risk === 'HIGH' ? 'amber' : trace.risk === 'MEDIUM' ? 'cyan' : 'green'}>
+          {trace.risk.toLowerCase()} risk
+        </Badge>
+        <Badge tone={trace.verdict === 'PROCEED' ? 'green' : 'amber'}>{trace.verdict.toLowerCase()}</Badge>
+        <Badge tone={trace.emoja.status === 'PASS' ? 'green' : 'amber'}>
+          emoja {trace.emoja.status.toLowerCase()}
+        </Badge>
+        {issues.length > 0 && (
+          <button
+            onClick={() => setOpen((value) => !value)}
+            className="ml-auto font-mono text-[8.5px] uppercase tracking-[0.14em] text-neutral-500 hover:text-white"
+          >
+            {open ? 'hide' : 'why'}
+          </button>
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-1">
+        {trace.checks.map((check) => (
+          <span
+            key={check.id}
+            title={check.note}
+            className={`rounded border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.1em] ${
+              GUARD_CHIP[check.status] ?? GUARD_CHIP.LOGGED
+            }`}
+          >
+            {check.id} {check.status.toLowerCase()}
+          </span>
+        ))}
+      </div>
+
+      {open && (
+        <div className="mt-2 space-y-1 border-t border-white/[0.06] pt-2">
+          {issues.length === 0 ? (
+            <p className="text-[10.5px] leading-relaxed text-neutral-500">No guard triggered this turn.</p>
+          ) : (
+            issues.map((check) => (
+              <p key={check.id} className="text-[10.5px] leading-relaxed text-neutral-500">
+                <span className="font-mono text-[8.5px] uppercase tracking-[0.14em] text-neutral-400">
+                  {check.id} {check.name}
+                </span>{' '}
+                — {check.note}
+              </p>
+            ))
+          )}
+          {trace.emoja.status === 'VETO' && (
+            <p className="text-[10.5px] leading-relaxed text-amber-300/80">EMOJA — {trace.emoja.note}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MessageCard: React.FC<MessageProps> = ({
   message,
   persona,
@@ -318,6 +400,8 @@ const MessageCard: React.FC<MessageProps> = ({
               />
             </button>
           ))}
+
+          {message.governor && <GovernorStrip trace={message.governor} />}
 
           {message.internalThoughts && message.internalThoughts.length > 0 && (
             <div className="mt-3 border-t border-white/[0.07] pt-2.5">
@@ -451,7 +535,15 @@ const HeaderMenu: React.FC<{
 /* Simulation                                                                 */
 /* -------------------------------------------------------------------------- */
 
-export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onOpenSettings, onToast }) => {
+export const Simulation: React.FC<SimulationProps> = ({
+  userProfile,
+  onBack,
+  onOpenSettings,
+  onOpenProtocol,
+  mas,
+  onMasChange,
+  onToast,
+}) => {
   const config = useLlmConfig();
   const meta = PROVIDERS[config.provider];
   const accent = ACCENT_CLASSES[meta.accent];
@@ -569,10 +661,21 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onO
 
       const readyNodes = contextNodes.filter((node) => node.status === 'ready');
 
+      if (mas.enabled && mas.mode === 'KB-PRIMARY' && readyNodes.length === 0) {
+        const miss = '[KB_MISS] KB-PRIMARY mode needs at least one ready KB entry. Inject a link or text node, or switch the protocol mode.';
+        setError(miss);
+        addToast('error', 'KB_MISS', 'No KB entry cleared the threshold.');
+        setIsProcessing(false);
+        abortRef.current = null;
+        return;
+      }
+
       try {
         const response = await chatWithClone(history, text, userProfile, files, readyNodes, {
           signal: controller.signal,
           onDelta: (_raw, parsed) => setDraft(parsed),
+          mas,
+          kb: readyNodes,
         });
 
         const cloneMessage: AgentMessage = {
@@ -584,7 +687,10 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onO
             { role: AgentRole.PRIMARY, content: response.primaryThought },
             { role: AgentRole.META, content: response.metaThought },
           ],
+          governor: response.governor,
         };
+
+        if (response.governor) onMasChange(recordTurn(mas, response.governor));
 
         if (response.sketchUrl) {
           cloneMessage.attachments = [
@@ -604,6 +710,7 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onO
         } else {
           const message = err instanceof Error ? err.message : 'Unknown fault.';
           setError(message);
+          onMasChange(recordError(mas, message));
           addToast('error', 'The link dropped', message);
         }
       } finally {
@@ -612,7 +719,7 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onO
         setDraft(null);
       }
     },
-    [addToast, contextNodes, userProfile]
+    [addToast, contextNodes, mas, onMasChange, userProfile]
   );
 
   const send = async () => {
@@ -731,6 +838,7 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onO
       type,
       title: title || (type === 'link' ? 'Linking perspective…' : `node-${Date.now()}`),
       content,
+      sourceUrl: type === 'link' ? content : undefined,
       mimeType,
       timestamp: Date.now(),
       status: type === 'link' ? 'fetching' : 'ready',
@@ -862,7 +970,9 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onO
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-          systemInstruction: `You are the voice of ${userProfile.name}. Speak as them, in short turns.`,
+          systemInstruction: `You are the voice of ${userProfile.name}. Speak as them, in short turns.${
+            buildMasBrief(mas) ? `\n\n${buildMasBrief(mas)}` : ''
+          }`,
         },
       });
 
@@ -963,6 +1073,31 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onO
             </p>
           </>
         )}
+      </div>
+
+      {/* Protocol */}
+      <div className="shrink-0 border-b border-white/[0.06] px-3 py-2">
+        <button
+          onClick={onOpenProtocol}
+          className={`flex w-full items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-left transition-colors hover:border-cyan-500/30 ${
+            collapsed ? 'justify-center' : ''
+          }`}
+          title="Operating protocol"
+        >
+          <IconShield size={13} className={mas.enabled ? 'text-cyan-400/70' : 'text-neutral-600'} />
+          {!collapsed && (
+            <>
+              <span className="min-w-0 flex-1 truncate font-mono text-[9px] uppercase tracking-[0.14em] text-neutral-400">
+                {mas.enabled ? `${mas.mode.toLowerCase()} · stage ${mas.stage}` : 'protocol bypassed'}
+              </span>
+              <span
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                  !mas.enabled ? 'bg-neutral-600' : mas.piConsent ? 'bg-emerald-400' : 'bg-cyan-400'
+                }`}
+              />
+            </>
+          )}
+        </button>
       </div>
 
       {/* Nodes */}
@@ -1101,6 +1236,22 @@ export const Simulation: React.FC<SimulationProps> = ({ userProfile, onBack, onO
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
+            <button
+              onClick={onOpenProtocol}
+              className="flex h-9 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] px-2.5 font-mono text-[9px] uppercase tracking-[0.14em] text-neutral-400 transition-colors hover:border-white/20 hover:text-white"
+              title="Operating protocol (MAS · JATAKA)"
+            >
+              <IconShield size={13} />
+              <span className="hidden max-w-[90px] truncate sm:inline">
+                {mas.enabled ? mas.mode.toLowerCase() : 'bypass'}
+              </span>
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  !mas.enabled ? 'bg-neutral-600' : mas.stage === 2 ? 'bg-amber-400' : mas.piConsent ? 'bg-emerald-400' : 'bg-cyan-400'
+                }`}
+              />
+            </button>
+
             <button
               onClick={onOpenSettings}
               className="hidden items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-neutral-400 transition-colors hover:border-white/20 hover:text-white sm:flex"

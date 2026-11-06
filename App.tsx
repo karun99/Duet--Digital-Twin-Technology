@@ -2,12 +2,14 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Onboarding } from './components/Onboarding';
 import { Simulation } from './components/Simulation';
 import { ProviderGate } from './components/ProviderGate';
+import { MasPanel } from './components/MasPanel';
 import { Modal, ToastStack } from './components/ui';
 import { IconKey, IconSettings } from './components/icons';
 import { useLlmConfig, isConnected, PROVIDERS } from './services/llm';
 import { ACCENT_CLASSES } from './services/llm/providers';
 import { clearSession } from './services/session';
-import type { Toast, ToastKind, UserProfile } from './types';
+import { loadMasState, saveMasState } from './services/mas';
+import type { MasState, Toast, ToastKind, UserProfile } from './types';
 
 const PROFILE_KEY = 'duet.profile.v1';
 
@@ -39,6 +41,8 @@ function App() {
   const [profile, setProfile] = useState<UserProfile | null>(() => loadProfile());
   const [connected, setConnected] = useState<boolean>(() => isConnected());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [protocolOpen, setProtocolOpen] = useState(false);
+  const [mas, setMas] = useState<MasState>(() => loadMasState());
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const pushToast = useCallback((kind: ToastKind, title: string, detail?: string) => {
@@ -53,6 +57,11 @@ function App() {
   useEffect(() => {
     setConnected(isConnected());
   }, [config]);
+
+  const updateMas = useCallback((next: MasState) => {
+    saveMasState(next);
+    setMas(next);
+  }, []);
 
   const startSession = (next: UserProfile) => {
     saveProfile(next);
@@ -128,7 +137,11 @@ function App() {
           </header>
 
           <main className="relative z-10 flex-1 overflow-y-auto px-3 pb-8 pt-2 sm:px-6">
-            <Onboarding onComplete={startSession} onOpenSettings={() => setSettingsOpen(true)} />
+            <Onboarding
+              onComplete={startSession}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenProtocol={() => setProtocolOpen(true)}
+            />
           </main>
         </>
       ) : (
@@ -137,6 +150,9 @@ function App() {
             userProfile={profile}
             onBack={endSession}
             onOpenSettings={() => setSettingsOpen(true)}
+            onOpenProtocol={() => setProtocolOpen(true)}
+            mas={mas}
+            onMasChange={updateMas}
             onToast={pushToast}
           />
         </div>
@@ -153,6 +169,10 @@ function App() {
           </p>
         </div>
         <ProviderGate mode="settings" onClose={() => setSettingsOpen(false)} />
+      </Modal>
+
+      <Modal open={protocolOpen} onClose={() => setProtocolOpen(false)} labelledBy="protocol-title">
+        <MasPanel state={mas} onChange={updateMas} />
       </Modal>
 
       <ToastStack

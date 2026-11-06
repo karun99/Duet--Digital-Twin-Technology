@@ -9,6 +9,7 @@ import { IconArrowLeft, IconFile, IconGlobe, IconSearch, IconShield, IconSpark, 
 interface OnboardingProps {
   onComplete: (profile: UserProfile) => void;
   onOpenSettings?: () => void;
+  onOpenProtocol?: () => void;
 }
 
 type Mode = 'manual' | 'search';
@@ -26,7 +27,7 @@ const PROGRESS_STEPS = [
   'Synthesising the cognitive avatar…',
 ];
 
-export const Onboarding: React.FC<OnboardingProps> = ({ onComplete, onOpenSettings }) => {
+export const Onboarding: React.FC<OnboardingProps> = ({ onComplete, onOpenSettings, onOpenProtocol }) => {
   const config = useLlmConfig();
   const meta = PROVIDERS[config.provider];
   const accent = ACCENT_CLASSES[meta.accent];
@@ -137,6 +138,15 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete, onOpenSettin
               className="ml-1 font-mono text-[9px] uppercase tracking-[0.14em] text-cyan-400 hover:text-cyan-300"
             >
               change
+            </button>
+          )}
+          {onOpenProtocol && (
+            <button
+              onClick={onOpenProtocol}
+              className="ml-1 inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.14em] text-neutral-500 hover:text-neutral-200"
+              title="Operating protocol"
+            >
+              <IconShield size={10} /> protocol
             </button>
           )}
         </div>

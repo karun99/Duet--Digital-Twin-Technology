@@ -76,6 +76,14 @@ export interface MasState {
   updatedAt: number;
 }
 
+/** PERSONAFORGE: persona grounding, distinctness and one-question discipline. */
+export interface ForgeTrace {
+  status: 'PASS' | 'FLAG' | 'VETO';
+  grounded: 'SOURCE' | 'PARTIAL' | 'NONE';
+  questions: number;
+  notes: string[];
+}
+
 export type GuardId = 'G1' | 'G2' | 'G3' | 'G4' | 'G5' | 'G6';
 export type GuardStatus = 'PASS' | 'FAIL' | 'ESCALATE' | 'DOWNGRADE' | 'FLAG' | 'LOGGED';
 
@@ -93,6 +101,7 @@ export interface GovernorTrace {
   verdict: 'PROCEED' | 'HALT' | 'ESCALATE';
   risk: 'LOW' | 'MEDIUM' | 'HIGH';
   emoja: { status: 'PASS' | 'VETO'; note: string };
+  forge?: ForgeTrace;
   kbUrls: string[];
   piUrls: string[];
   at: number;

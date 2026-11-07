@@ -10,11 +10,13 @@ import {
   MasState,
   UserProfile,
 } from '../types';
-import { chatWithClone, fetchLinkContent, type CloneStreamState } from '../services/duet';
+import { chatWithClone, fetchLinkContent, fetchSourceDocument, type CloneStreamState } from '../services/duet';
 import { getApiKey, PROVIDERS, useLlmConfig } from '../services/llm';
 import { ACCENT_CLASSES } from '../services/llm/providers';
 import { clearSession, downloadFile, loadSession, saveSession, transcriptMarkdown } from '../services/session';
 import { buildMasBrief, recordError, recordTurn } from '../services/mas';
+import { isHttpUrl, parseCommand, suggestCommands } from '../services/commands';
+import { buildPersonaforgeCommand, PERSONAFORGE_COMMAND, type ActiveForgeCommand } from '../services/personaforge';
 import { Badge, Button, Field, Modal, inputClass } from './ui';
 import {
   IconArrowLeft,
@@ -263,6 +265,8 @@ const GUARD_CHIP: Record<string, string> = {
 const GovernorStrip: React.FC<{ trace: GovernorTrace }> = ({ trace }) => {
   const [open, setOpen] = useState(false);
   const issues = trace.checks.filter((check) => check.status !== 'PASS' && check.status !== 'LOGGED');
+  const forgeNotes = trace.forge?.notes ?? [];
+  const hasIssues = issues.length > 0 || forgeNotes.length > 0 || trace.emoja.status === 'VETO';
 
   return (
     <div className="mt-3 rounded-xl border border-white/[0.07] bg-white/[0.015] px-3 py-2.5">
@@ -279,7 +283,12 @@ const GovernorStrip: React.FC<{ trace: GovernorTrace }> = ({ trace }) => {
         <Badge tone={trace.emoja.status === 'PASS' ? 'green' : 'amber'}>
           emoja {trace.emoja.status.toLowerCase()}
         </Badge>
-        {issues.length > 0 && (
+        {trace.forge && (
+          <Badge tone={trace.forge.status === 'PASS' ? 'green' : 'amber'}>
+            forge {trace.forge.status.toLowerCase()}
+          </Badge>
+        )}
+        {hasIssues && (
           <button
             onClick={() => setOpen((value) => !value)}
             className="ml-auto font-mono text-[8.5px] uppercase tracking-[0.14em] text-neutral-500 hover:text-white"
@@ -305,7 +314,7 @@ const GovernorStrip: React.FC<{ trace: GovernorTrace }> = ({ trace }) => {
 
       {open && (
         <div className="mt-2 space-y-1 border-t border-white/[0.06] pt-2">
-          {issues.length === 0 ? (
+          {issues.length === 0 && !trace.forge ? (
             <p className="text-[10.5px] leading-relaxed text-neutral-500">No guard triggered this turn.</p>
           ) : (
             issues.map((check) => (
@@ -319,6 +328,22 @@ const GovernorStrip: React.FC<{ trace: GovernorTrace }> = ({ trace }) => {
           )}
           {trace.emoja.status === 'VETO' && (
             <p className="text-[10.5px] leading-relaxed text-amber-300/80">EMOJA — {trace.emoja.note}</p>
+          )}
+          {trace.forge && (
+            <div className="space-y-1">
+              <p className="text-[10.5px] leading-relaxed text-neutral-500">
+                <span className="font-mono text-[8.5px] uppercase tracking-[0.14em] text-violet-300/80">
+                  PERSONAFORGE {trace.forge.status}
+                </span>{' '}
+                — {trace.forge.grounded.toLowerCase()} grounding · {trace.forge.questions} question
+                {trace.forge.questions === 1 ? '' : 's'} this turn
+              </p>
+              {forgeNotes.map((note, index) => (
+                <p key={index} className="text-[10.5px] leading-relaxed text-violet-300/80">
+                  {note}
+                </p>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -550,6 +575,7 @@ export const Simulation: React.FC<SimulationProps> = ({
 
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [contextNodes, setContextNodes] = useState<ContextNode[]>([]);
+  const [activeCommand, setActiveCommand] = useState<ActiveForgeCommand | null>(null);
   const [input, setInput] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -568,6 +594,8 @@ export const Simulation: React.FC<SimulationProps> = ({
   const [emotion, setEmotion] = useState<Emotion>('neutral');
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+
+  const commandMatches = useMemo(() => suggestCommands(input), [input]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -652,7 +680,14 @@ export const Simulation: React.FC<SimulationProps> = ({
   };
 
   const runClone = useCallback(
-    async (history: AgentMessage[], text: string, files: Attachment[]) => {
+    async (
+      history: AgentMessage[],
+      text: string,
+      files: Attachment[],
+      commandArg?: ActiveForgeCommand | null
+    ) => {
+      // undefined means "use the active command"; null means "force normal chat".
+      const command = commandArg === undefined ? activeCommand : commandArg;
       setError(null);
       setIsProcessing(true);
       setDraft(null);
@@ -676,6 +711,7 @@ export const Simulation: React.FC<SimulationProps> = ({
           onDelta: (_raw, parsed) => setDraft(parsed),
           mas,
           kb: readyNodes,
+          command: command ?? undefined,
         });
 
         const cloneMessage: AgentMessage = {
@@ -719,13 +755,79 @@ export const Simulation: React.FC<SimulationProps> = ({
         setDraft(null);
       }
     },
-    [addToast, contextNodes, mas, onMasChange, userProfile]
+    [activeCommand, addToast, contextNodes, mas, onMasChange, userProfile]
   );
+
+  const exitCommand = useCallback(() => {
+    setActiveCommand(null);
+    addToast('info', 'PERSONAFORGE off', 'Back to the persona’s normal voice.');
+  }, [addToast]);
 
   const send = async () => {
     const text = input.trim();
     if (isPaused || isProcessing) return;
     if (!text && pendingAttachments.length === 0) return;
+
+    const command = parseCommand(text);
+
+    // /forge exit leaves the command without sending a turn.
+    if (command?.name === 'forge' && /^exit$/i.test(command.arg)) {
+      exitCommand();
+      setInput('');
+      return;
+    }
+
+    if (command?.name === 'forge') {
+      if (!isHttpUrl(command.arg)) {
+        addToast('error', 'PERSONAFORGE needs one URL', `Use ${PERSONAFORGE_COMMAND.usage} — one page per command.`);
+        return;
+      }
+
+      const userMessage: AgentMessage = {
+        id: `user-${Date.now()}`,
+        role: AgentRole.USER,
+        content: text,
+        timestamp: Date.now(),
+        attachments: [...pendingAttachments],
+      };
+      const next = [...messages, userMessage];
+      setMessages(next);
+      setInput('');
+      setPendingAttachments([]);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      setIsProcessing(true);
+
+      try {
+        const source = await fetchSourceDocument(command.arg);
+        const prompt = buildPersonaforgeCommand({
+          url: command.arg,
+          profile: userProfile,
+          sourceText: source.text,
+          sourceTitle: source.title,
+          nodes: contextNodes.filter((node) => node.status === 'ready'),
+        });
+        const active: ActiveForgeCommand = {
+          id: 'forge',
+          url: command.arg,
+          prompt,
+          label: 'PERSONAFORGE',
+          grounded: source.via === 'jina' ? 'SOURCE' : 'PARTIAL',
+        };
+        setActiveCommand(active);
+        addToast(
+          'info',
+          'PERSONAFORGE armed',
+          source.via === 'jina'
+            ? 'Source fetched. Phase 1 will extract the cast; confirm it before Phase 2.'
+            : 'Source could not be fetched. The command will mark unknowns instead of inventing them.'
+        );
+        await runClone(next, text, userMessage.attachments ?? [], active);
+      } catch (err) {
+        setIsProcessing(false);
+        addToast('error', 'Command failed', err instanceof Error ? err.message : 'Unknown fault.');
+      }
+      return;
+    }
 
     const userMessage: AgentMessage = {
       id: `user-${Date.now()}`,
@@ -769,12 +871,14 @@ export const Simulation: React.FC<SimulationProps> = ({
     setMessages([]);
     setDraft(null);
     setError(null);
+    setActiveCommand(null);
     clearSession();
   };
 
   const endSession = () => {
     if (!confirm('Leave this duet and return to persona selection?')) return;
     abortRef.current?.abort();
+    setActiveCommand(null);
     onBack();
   };
 
@@ -1368,6 +1472,49 @@ export const Simulation: React.FC<SimulationProps> = ({
         {/* Composer */}
         <div className="shrink-0 border-t border-white/[0.06] bg-[#050505]/95 px-2.5 pb-2.5 pt-2.5 backdrop-blur-xl sm:px-4 sm:pb-4">
           <div className="mx-auto w-full max-w-3xl">
+            {commandMatches.length > 0 && (
+              <div className="mb-2 overflow-hidden rounded-xl border border-violet-500/25 bg-[#0c0a12] p-1.5 shadow-3xl animate-fade-in">
+                {commandMatches.map((command) => (
+                  <button
+                    key={command.name}
+                    onClick={() => {
+                      setInput(`/${command.name} `);
+                      textareaRef.current?.focus();
+                    }}
+                    className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/[0.06]"
+                  >
+                    <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.14em] text-violet-300">
+                      /{command.name}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[11.5px] leading-relaxed text-neutral-300">
+                        {command.description}
+                      </span>
+                      <span className="mt-0.5 block font-mono text-[9px] text-neutral-600">{command.usage}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {activeCommand && (
+              <div className="mb-2 flex items-center gap-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.06] px-3 py-2">
+                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-400" />
+                <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.18em] text-violet-300">
+                  {activeCommand.label}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-neutral-500">
+                  {activeCommand.url}
+                </span>
+                <button
+                  onClick={exitCommand}
+                  className="shrink-0 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 font-mono text-[8.5px] uppercase tracking-[0.14em] text-neutral-400 hover:border-white/20 hover:text-white"
+                >
+                  exit
+                </button>
+              </div>
+            )}
+
             {pendingAttachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-1.5">
                 {pendingAttachments.map((attachment, index) => (
@@ -1427,7 +1574,13 @@ export const Simulation: React.FC<SimulationProps> = ({
                   }
                 }}
                 rows={1}
-                placeholder={isPaused ? 'Link paused — resume to speak' : `Message ${userProfile.name}…`}
+                placeholder={
+                  isPaused
+                    ? 'Link paused — resume to speak'
+                    : activeCommand
+                      ? 'Answer in character — one bounded question per turn…'
+                      : `Message ${userProfile.name}… or type /forge <url>`
+                }
                 disabled={isPaused}
                 aria-label="Message"
                 className="max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-1 py-2 text-[14px] leading-relaxed text-white placeholder-neutral-600 focus:outline-none disabled:opacity-50"
@@ -1469,7 +1622,7 @@ export const Simulation: React.FC<SimulationProps> = ({
 
             <div className="mt-1.5 flex items-center justify-between px-1 font-mono text-[8.5px] uppercase tracking-[0.14em] text-neutral-700">
               <span className="truncate">
-                enter to send · shift+enter newline
+                {activeCommand ? '/forge exit to leave the command · shift+enter newline' : 'enter to send · /forge <url> · shift+enter newline'}
               </span>
               <span className="flex shrink-0 items-center gap-1.5">
                 <span className={`h-1 w-1 rounded-full ${accent.dot}`} />

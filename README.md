@@ -15,10 +15,20 @@ You watch all three streams form live, and can re-open the reasoning of any past
 turn. Optional `[[SKETCH]]` blocks become diagrams when an image model is
 available.
 
-A local **MAS operating protocol** — Six Hats, EMOJA, DUNCE, KUNDALINI and
-JATAKA — checks tone, risk and evidence on every reply. Open **Protocol** to set
-PI consent, choose a retrieval mode, inspect the guard chips, or read the
-DUNCE/audit logs.
+A local **MAS operating protocol** — Six Hats, EMOJA, PERSONAFORGE, DUNCE,
+KUNDALINI and JATAKA — checks tone, risk and evidence on every reply. Open
+**Protocol** to set PI consent, choose a retrieval mode, inspect the guard
+chips, or read the DUNCE/audit logs.
+
+### PERSONAFORGE command
+
+Type `/forge <url>` in a duet to run the **PERSONAFORGE** protocol on one page.
+It fetches the source, extracts the real people and roles the page states,
+produces a cast table and persona cards, then interviews you one persona at a
+time. Every persona attribute must be traceable to the page; unknowns are
+reported as unknown. The command runs beside EMOJA and JATAKA, so tone and
+safety checks still apply. Type `/forge exit` to return to the persona's normal
+voice.
 
 > Duet started as a shared first project. The memory of building it is part of
 > what it is.
@@ -135,6 +145,8 @@ services/
     client.ts      transport: SSE streaming, vision, model listing, validation
   duet.ts          persona lookup, link ingestion, avatars, clone chat
   mas.ts           operating protocol, guards, KB/PI addresses, DUNCE log
+  personaforge.ts  /forge protocol, persona cards, grounding/turn checks
+  commands.ts      slash-command parsing and command palette
   session.ts       local session persistence + markdown export
 components/
   MasPanel.tsx     protocol controls, PI consent, DUNCE and audit views
@@ -197,6 +209,9 @@ parsed out before display.
 | EMOJA tone veto and rewrite | **Enforced** for shouting/hostility patterns |
 | DUNCE log + stage escalation | **Enforced** in `localStorage` |
 | G2 human approval gate | **Escalates** — it never executes an action |
+| PERSONAFORGE command injection | **Enforced** — the `/forge` prompt is in the system instruction |
+| PERSONAFORGE one-question check | **Enforced** — question marks are counted locally |
+| PERSONAFORGE meta-leak / unsourced-credential check | **Heuristic** — pattern matches, not a firewall |
 | SITEMAP / INDEX crawling | **Declared** — no crawler exists |
 | `REFRESH` write-back | **Policy** — no persistent KB store to write to |
 | Six Hats deliberation | **Prompt-level** — not a hard firewall |

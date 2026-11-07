@@ -12,6 +12,7 @@ import {
   setPiConsent,
 } from '../services/mas';
 import { downloadFile } from '../services/session';
+import { PERSONAFORGE_COMMAND, PERSONAFORGE_PRINCIPLES } from '../services/personaforge';
 import { Badge, Button, Field, inputClass } from './ui';
 import { IconCheck, IconDownload, IconShield, IconSpark, IconTrash, IconWarn } from './icons';
 
@@ -87,8 +88,8 @@ export const MasPanel: React.FC<MasPanelProps> = ({ state, onChange }) => {
               Operating protocol
             </h2>
             <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
-              Six Hats · EMOJA · DUNCE · KUNDALINI · JATAKA. Policy is prompt-level; the checks below are
-              computed locally from each reply.
+              Six Hats · EMOJA · PERSONAFORGE · DUNCE · KUNDALINI · JATAKA. Policy is prompt-level; the
+              checks below are computed locally from each reply.
             </p>
           </div>
           <div className="ml-auto hidden shrink-0 sm:block">
@@ -298,6 +299,48 @@ export const MasPanel: React.FC<MasPanelProps> = ({ state, onChange }) => {
               </p>
             </Field>
 
+            <Field label="PERSONAFORGE command">
+              <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.04] p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-md border border-violet-500/25 bg-violet-500/10 px-2 py-1 font-mono text-[9.5px] uppercase tracking-[0.14em] text-violet-300">
+                    {PERSONAFORGE_COMMAND.usage}
+                  </span>
+                  <span className="text-[11px] leading-relaxed text-neutral-500">
+                    typed in the composer, one URL at a time
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-neutral-400">
+                  {PERSONAFORGE_COMMAND.description} It fetches the page, extracts the cast, and interviews
+                  you one persona at a time. The command runs beside EMOJA and JATAKA, not instead of them.
+                </p>
+                <div className="mt-2.5 space-y-1">
+                  {PERSONAFORGE_PRINCIPLES.map((principle) => (
+                    <div
+                      key={principle.id}
+                      className="flex gap-2.5 rounded-lg border border-white/[0.05] bg-white/[0.015] px-3 py-2"
+                    >
+                      <span className="mt-0.5 shrink-0 font-mono text-[9px] text-violet-300/70">
+                        {principle.id}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-neutral-400">
+                          {principle.name}
+                        </p>
+                        <p className="mt-0.5 text-[10.5px] leading-relaxed text-neutral-500">
+                          {principle.rule}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10.5px] leading-relaxed text-neutral-600">
+                  Type <span className="text-violet-300/80">/forge exit</span> to return to the persona’s
+                  normal voice. The command checks one-question discipline, meta leaks, and unsourced
+                  credentials; those checks are heuristics, not a firewall.
+                </p>
+              </div>
+            </Field>
+
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
               <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-neutral-500">Honest status</p>
               <ul className="mt-2 space-y-1.5 text-[10.5px] leading-relaxed text-neutral-500">
@@ -305,6 +348,7 @@ export const MasPanel: React.FC<MasPanelProps> = ({ state, onChange }) => {
                 <li>This client has no live crawler; SITEMAP and INDEX are declared modes only.</li>
                 <li>No server-side PI. Everything lives in this browser and can be exported or reset.</li>
                 <li>Guards are policy instructions, not a hard enforcement firewall.</li>
+                <li>/forge fetches through r.jina.ai; if the reader fails, the command marks unknowns instead of inventing them.</li>
               </ul>
             </div>
 

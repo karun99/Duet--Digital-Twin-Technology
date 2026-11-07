@@ -16,6 +16,7 @@ import {
 import { chat, complete, getApiKey, getConfig, providerMeta, type ContentPart } from './llm';
 import { JATAKA_GUARDRAIL_BLOCK } from '../constants';
 import { buildKbEntries, buildMasPrompt, governReply } from './mas';
+import { inspectForgeReply, type ActiveForgeCommand } from './personaforge';
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const TEXT_MODEL = 'gemini-2.5-flash';
@@ -234,15 +235,44 @@ export const searchUserBio = async (name: string): Promise<SearchResult> => {
   return { bio: cleanBio(bio), sources: [] };
 };
 
-async function readLinkText(url: string): Promise<string | null> {
+async function readLinkText(url: string, timeoutMs = 15000): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`https://r.jina.ai/${url}`, { headers: { Accept: 'text/plain' } });
+    const response = await fetch(`https://r.jina.ai/${url}`, {
+      headers: { Accept: 'text/plain' },
+      signal: controller.signal,
+    });
     if (!response.ok) return null;
     const text = (await response.text()).trim();
     return text.length > 60 ? text : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+export interface SourceDocument {
+  url: string;
+  title: string;
+  text: string;
+  via: 'jina' | 'none';
+}
+
+/**
+ * Fetch a page as plain text for a command. The reader proxy is best-effort:
+ * a failure returns an empty document and the command is told not to fill the
+ * gap from memory.
+ */
+export async function fetchSourceDocument(url: string): Promise<SourceDocument> {
+  const raw = await readLinkText(url, 22000);
+  if (!raw) return { url, title: url, text: '', via: 'none' };
+  const { title } = summarizeText(raw, url);
+  // The page is untrusted data: escape protocol-tag brackets so a page cannot
+  // forge [[RESPONSE]] or [[GOVERNOR]] sections in the prompt.
+  const text = raw.slice(0, 16000).replace(/\[\[/g, '[ [').replace(/\]\]/g, '] ]');
+  return { url, title, text, via: 'jina' };
 }
 
 function summarizeText(raw: string, url: string): { title: string; summary: string } {
@@ -368,12 +398,15 @@ export interface CloneChatOptions {
   signal?: AbortSignal;
   mas?: MasState;
   kb?: ContextNode[];
+  /** An active slash command, injected above the persona's normal voice. */
+  command?: ActiveForgeCommand;
 }
 
 function buildSystemInstruction(
   userProfile: UserProfile,
   extraContext: string,
-  masBlock: string
+  masBlock: string,
+  commandBlock?: string
 ): string {
   return `YOU ARE NO LONGER AN AI. You are a high-fidelity simulation of ${userProfile.name}'s parallel consciousness.
 
@@ -401,7 +434,7 @@ If an abstract visual would carry the idea better than words, end the reply with
 [[SKETCH]] a precise visual description of the diagram/blueprint [[/SKETCH]]
 Use it sparingly — at most once every few turns.
 
-${JATAKA_GUARDRAIL_BLOCK}${masBlock ? `\n\n${masBlock}` : ''}`;
+${commandBlock ? `ACTIVE COMMAND\n${commandBlock}\n\n` : ''}${JATAKA_GUARDRAIL_BLOCK}${masBlock ? `\n\n${masBlock}` : ''}`;
 }
 
 function stripGovernorBlock(raw: string): string {
@@ -492,7 +525,8 @@ export const chatWithClone = async (
   const systemInstruction = buildSystemInstruction(
     userProfile,
     extraContext,
-    buildMasPrompt(options.mas, userProfile, contextNodes)
+    buildMasPrompt(options.mas, userProfile, contextNodes),
+    options.command?.prompt
   );
 
   const messages = history
@@ -547,6 +581,17 @@ export const chatWithClone = async (
         nodes: contextNodes,
       })
     : undefined;
+
+  // PERSONAFORGE runs as a command beside the normal governor. It inspects the
+  // reply for meta leaks, unsourced credentials and stacked questions.
+  if (governed && options.command?.id === 'forge') {
+    governed.trace.forge = inspectForgeReply({
+      response: governed.text,
+      profile: userProfile,
+      nodes: contextNodes,
+      grounded: options.command.grounded,
+    });
+  }
 
   let sketchUrl: string | undefined;
   if (parsed.sketch) {

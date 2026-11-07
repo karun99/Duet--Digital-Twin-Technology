@@ -1,6 +1,6 @@
 {
   "name": "Duet: Agentic AI & Parallel Consciousness",
-  "description": "A digital-twin agent that reconstructs a person's worldview and answers in three streams (instinct, reasoning, voice). Replies are governed by a local MAS layer: Six Hats, EMOJA tone veto, DUNCE failure memory, KUNDALINI staging, and JATAKA guardrails.",
+  "description": "A digital-twin agent that reconstructs a person's worldview and answers in three streams (instinct, reasoning, voice). The /forge command adds PERSONAFORGE: a grounded cast built from one URL, interviewed one persona at a time. Replies are governed by a local MAS layer: Six Hats, EMOJA tone veto, DUNCE failure memory, KUNDALINI staging, and JATAKA guardrails.",
   "requestFramePermissions": [
     "microphone"
   ]

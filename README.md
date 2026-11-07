@@ -216,6 +216,18 @@ is no server-side PI, and the guard checks are heuristics over the reply text.
 
 ---
 
+## Security
+
+Duet is browser-only: there is no first-party server, and keys, personas and PI
+stay in your browser. The policy also states the limits honestly — keys live in
+`localStorage`, the app does not set a Content-Security-Policy, and the MAS
+checks are local rather than server-enforced.
+
+See [**SECURITY.md**](SECURITY.md) for the threat model, known limitations, and
+private reporting process.
+
+---
+
 ## License
 
 Personal project by [Sai Karun Nandipati](https://karun99.github.io).

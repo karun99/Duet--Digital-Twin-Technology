@@ -20,24 +20,61 @@ KUNDALINI and JATAKA — checks tone, risk and evidence on every reply. Open
 **Protocol** to set PI consent, choose a retrieval mode, inspect the guard
 chips, or read the DUNCE/audit logs.
 
-### PERSONAFORGE command
+## PERSONAFORGE command
 
-Type `/forge <url>` in a duet to run the **PERSONAFORGE** protocol on one page.
-It fetches the source, extracts the real people and roles the page states,
-produces a cast table and persona cards, then interviews you one persona at a
-time. Every persona attribute must be traceable to the page; unknowns are
-reported as unknown. The command runs beside EMOJA and JATAKA, so tone and
-safety checks still apply. Type `/forge exit` to return to the persona's normal
-voice.
+`/forge <url>` turns one page into a grounded cast, then interviews you one
+persona at a time.
 
-Fetching is best-effort and tries three routes in order: Jina Reader, the
-AllOrigins CORS proxy, then the page directly. If all three fail the command
-still runs, but it is explicitly told not to fill the gap from memory.
+```text
+/forge https://www.ycombinator.com/people
+/forge https://www.anthropic.com/company
+/forge exit
+```
 
-When a cast is detected, a picker appears above the composer with the page's
-people and roles. Pick one, or say **"I don't know."** A question that goes
-unanswered twice becomes a `FINDING` in the scorecard, and the interviewer stops
-re-asking it and moves on.
+Every persona attribute must be traceable to the page. Unknowns stay unknown.
+The command runs beside EMOJA and JATAKA, so tone and safety checks still apply.
+
+### 1. Fetch
+
+Three routes are tried in order: **Jina Reader → AllOrigins CORS proxy → the
+page directly**. Proxy and direct responses are converted from HTML to text. If
+all three fail, the command still runs, but it is explicitly told not to fill
+the gap from memory. The route that won is recorded on the command state
+(`jina`, `proxy`, `direct` or `none`).
+
+### 2. Extract
+
+A deterministic extractor proposes a cast before the model speaks. It reads:
+
+- `Name — Role at Org`, `Name | Role`, `Role: Name`
+- card grids such as `![Image](…)Name Role`
+- plain name lists under people headings (board, trustees, team, speakers,
+  mentors, faculty)
+- a name with its role on the next or previous line
+
+Each candidate is injected into the prompt as **EXTRACTED CAST CANDIDATES**
+with the source line that supports it. The model must drop any candidate the
+source does not support. If auto-detection finds nothing but the page clearly
+names people, the model may build the cast from those named people; it may not
+invent one.
+
+### 3. Pick
+
+When a cast is detected, a **PERSONAFORGE · CAST** picker appears above the
+composer. Each button shows the person's name and role; hover shows the evidence
+line. Choose a persona, or say **"I don't know."**
+
+### 4. Interview
+
+The chosen persona asks one bounded question per turn. A running scorecard
+tracks `Verdict | Strength shown | Gap exposed | Fix offered`. A question is
+never asked the same way twice: if it goes unanswered twice, the second miss
+becomes `FINDING: <question> went unanswered twice` in the scorecard, and the
+interviewer stops re-asking it and moves on.
+
+The **I don't know** button is always available beside the cast, and consecutive
+misses are tracked per persona in the UI as well as in the prompt. `EXIT` in the
+command bar, or `/forge exit`, returns to the persona's normal voice.
 
 > Duet started as a shared first project. The memory of building it is part of
 > what it is.
@@ -152,9 +189,9 @@ services/
     providers.ts   provider registry: endpoints, key hints, accents
     config.ts      localStorage config, host keys, reactive store
     client.ts      transport: SSE streaming, vision, model listing, validation
-  duet.ts          persona lookup, link ingestion, avatars, clone chat
+  duet.ts          persona lookup, multi-route link ingestion, avatars, chat
   mas.ts           operating protocol, guards, KB/PI addresses, DUNCE log
-  personaforge.ts  /forge protocol, persona cards, grounding/turn checks
+  personaforge.ts  /forge protocol, cast extraction, grounding/turn checks
   commands.ts      slash-command parsing and command palette
   session.ts       local session persistence + markdown export
 components/
@@ -220,7 +257,10 @@ parsed out before display.
 | DUNCE log + stage escalation | **Enforced** in `localStorage` |
 | G2 human approval gate | **Escalates** — it never executes an action |
 | PERSONAFORGE command injection | **Enforced** — the `/forge` prompt is in the system instruction |
+| PERSONAFORGE source fetch | **Enforced** — Jina → AllOrigins → direct, each with a timeout |
+| PERSONAFORGE cast extraction | **Heuristic** — deterministic candidates; the model drops anything unsupported by the source |
 | PERSONAFORGE one-question check | **Enforced** — question marks are counted locally |
+| PERSONAFORGE two-miss finding | **Enforced** in the UI for consecutive misses per persona; the prompt tracks the specific question |
 | PERSONAFORGE meta-leak / unsourced-credential check | **Heuristic** — pattern matches, not a firewall |
 | SITEMAP / INDEX crawling | **Declared** — no crawler exists |
 | `REFRESH` write-back | **Policy** — no persistent KB store to write to |

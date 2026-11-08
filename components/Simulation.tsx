@@ -16,7 +16,7 @@ import { ACCENT_CLASSES } from '../services/llm/providers';
 import { clearSession, downloadFile, loadSession, saveSession, transcriptMarkdown } from '../services/session';
 import { buildMasBrief, recordError, recordTurn } from '../services/mas';
 import { isHttpUrl, parseCommand, suggestCommands } from '../services/commands';
-import { buildPersonaforgeCommand, PERSONAFORGE_COMMAND, type ActiveForgeCommand } from '../services/personaforge';
+import { buildPersonaforgeCommand, extractPersonas, PERSONAFORGE_COMMAND, type ActiveForgeCommand, type ForgePersona } from '../services/personaforge';
 import { Badge, Button, Field, Modal, inputClass } from './ui';
 import {
   IconArrowLeft,
@@ -576,6 +576,9 @@ export const Simulation: React.FC<SimulationProps> = ({
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [contextNodes, setContextNodes] = useState<ContextNode[]>([]);
   const [activeCommand, setActiveCommand] = useState<ActiveForgeCommand | null>(null);
+  const [forgePersona, setForgePersona] = useState<ForgePersona | null>(null);
+  const [forgeMisses, setForgeMisses] = useState<Record<string, number>>({});
+  const [forgeFindings, setForgeFindings] = useState<string[]>([]);
   const [input, setInput] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -760,6 +763,9 @@ export const Simulation: React.FC<SimulationProps> = ({
 
   const exitCommand = useCallback(() => {
     setActiveCommand(null);
+    setForgePersona(null);
+    setForgeMisses({});
+    setForgeFindings([]);
     addToast('info', 'PERSONAFORGE off', 'Back to the persona’s normal voice.');
   }, [addToast]);
 
@@ -799,11 +805,13 @@ export const Simulation: React.FC<SimulationProps> = ({
 
       try {
         const source = await fetchSourceDocument(command.arg);
+        const cast = extractPersonas(source.text, command.arg);
         const prompt = buildPersonaforgeCommand({
           url: command.arg,
           profile: userProfile,
           sourceText: source.text,
           sourceTitle: source.title,
+          cast,
           nodes: contextNodes.filter((node) => node.status === 'ready'),
         });
         const active: ActiveForgeCommand = {
@@ -811,16 +819,33 @@ export const Simulation: React.FC<SimulationProps> = ({
           url: command.arg,
           prompt,
           label: 'PERSONAFORGE',
-          grounded: source.via === 'jina' ? 'SOURCE' : 'PARTIAL',
+          grounded: source.via === 'none' ? 'PARTIAL' : 'SOURCE',
+          cast,
+          via: source.via,
         };
         setActiveCommand(active);
-        addToast(
-          'info',
-          'PERSONAFORGE armed',
-          source.via === 'jina'
-            ? 'Source fetched. Phase 1 will extract the cast; confirm it before Phase 2.'
-            : 'Source could not be fetched. The command will mark unknowns instead of inventing them.'
-        );
+        setForgePersona(null);
+        setForgeMisses({});
+        setForgeFindings([]);
+        if (source.via === 'none') {
+          addToast(
+            'error',
+            'Source could not be fetched',
+            source.error ?? 'The command will mark unknowns instead of inventing them.'
+          );
+        } else if (!cast.length) {
+          addToast(
+            'info',
+            'Source fetched · no cast detected',
+            'The page may be sparse or written without role lines. Try a team/about page, or the model will say what it can verify.'
+          );
+        } else {
+          addToast(
+            'info',
+            `PERSONAFORGE armed · ${cast.length} personas`,
+            'Pick one below, or say “I don’t know.” Phase 1 will confirm the cast first.'
+          );
+        }
         await runClone(next, text, userMessage.attachments ?? [], active);
       } catch (err) {
         setIsProcessing(false);
@@ -828,6 +853,8 @@ export const Simulation: React.FC<SimulationProps> = ({
       }
       return;
     }
+
+    if (!command && activeCommand) recordForgeAnswer(text);
 
     const userMessage: AgentMessage = {
       id: `user-${Date.now()}`,
@@ -843,6 +870,68 @@ export const Simulation: React.FC<SimulationProps> = ({
     setPendingAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     await runClone(next, text, userMessage.attachments ?? []);
+  };
+
+  /** Track "I don't know" answers; the second miss becomes a scorecard finding. */
+  const recordForgeAnswer = useCallback(
+    (text: string): void => {
+      if (!activeCommand) return;
+      const key = forgePersona?.name ?? 'current';
+      const unknown = /^(?:i\s*(?:do\s*n[o']?t|don'?t)\s*know|idk|not sure|unknown|no idea)\.?$/i.test(
+        text.trim()
+      );
+      if (!unknown) {
+        setForgeMisses((previous) => (previous[key] ? { ...previous, [key]: 0 } : previous));
+        return;
+      }
+      const count = (forgeMisses[key] ?? 0) + 1;
+      setForgeMisses((previous) => ({ ...previous, [key]: (previous[key] ?? 0) + 1 }));
+      if (count === 2) {
+        const subject = key === 'current' ? 'The current persona’s' : `${key}’s`;
+        const finding = `FINDING: ${subject} question went unanswered twice.`;
+        setForgeFindings((previous) => (previous.includes(finding) ? previous : [...previous, finding]));
+        addToast('info', 'FINDING recorded', finding);
+      }
+    },
+    [activeCommand, addToast, forgeMisses, forgePersona]
+  );
+
+  /** Pick a persona from the extracted cast and start its interview. */
+  const pickPersona = async (persona: ForgePersona) => {
+    if (isProcessing || !activeCommand) return;
+    setForgePersona(persona);
+    setForgeMisses((previous) => ({ ...previous, [persona.name]: 0 }));
+    setInput('');
+    const role = persona.role
+      ? ` (${persona.role}${persona.organization ? `, ${persona.organization}` : ''})`
+      : '';
+    const text = `I pick ${persona.name}${role}. Ask your first bounded question.`;
+    const userMessage: AgentMessage = {
+      id: `user-${Date.now()}`,
+      role: AgentRole.USER,
+      content: text,
+      timestamp: Date.now(),
+    };
+    const next = [...messages, userMessage];
+    setMessages(next);
+    await runClone(next, text, [], activeCommand);
+  };
+
+  /** Answer the current persona with "I don't know" (counts toward a finding). */
+  const answerUnknown = async () => {
+    if (isProcessing || !activeCommand) return;
+    recordForgeAnswer("I don't know.");
+    const text = "I don't know.";
+    const userMessage: AgentMessage = {
+      id: `user-${Date.now()}`,
+      role: AgentRole.USER,
+      content: text,
+      timestamp: Date.now(),
+    };
+    const next = [...messages, userMessage];
+    setMessages(next);
+    setInput('');
+    await runClone(next, text, [], activeCommand);
   };
 
   const regenerate = async () => {
@@ -1512,6 +1601,64 @@ export const Simulation: React.FC<SimulationProps> = ({
                 >
                   exit
                 </button>
+              </div>
+            )}
+
+            {activeCommand && (
+              <div className="mb-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-2.5">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5 px-0.5">
+                  <span className="font-mono text-[8.5px] uppercase tracking-[0.18em] text-violet-300">
+                    PERSONAFORGE · CAST
+                  </span>
+                  <span className="text-[10px] text-neutral-400">
+                    Pick one, or say “I don’t know.”
+                  </span>
+                </div>
+                {activeCommand.cast.length === 0 && (
+                  <p className="mb-1.5 px-0.5 text-[10px] leading-relaxed text-neutral-400">
+                    No personas were auto-detected. The model will confirm the cast from the page, or
+                    say the source is too sparse.
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-1.5">
+                  {activeCommand.cast.map((persona) => {
+                    const selected = forgePersona?.name === persona.name;
+                    return (
+                      <button
+                        key={persona.name}
+                        onClick={() => void pickPersona(persona)}
+                        disabled={isProcessing}
+                        title={`${persona.role}${persona.organization ? ` · ${persona.organization}` : ''}\n${persona.evidence}`}
+                        className={`max-w-[16rem] rounded-lg border px-2.5 py-1.5 text-left transition-colors disabled:opacity-40 ${
+                          selected
+                            ? 'border-violet-400/60 bg-violet-500/20 text-white'
+                            : 'border-white/10 bg-white/[0.02] text-neutral-300 hover:border-violet-400/40 hover:text-white'
+                        }`}
+                      >
+                        <span className="block text-[11px] font-medium leading-tight">{persona.name}</span>
+                        <span className="block truncate text-[9px] text-neutral-500">{persona.role}</span>
+                      </button>
+                    );
+                  })}
+                  <button
+                    onClick={() => void answerUnknown()}
+                    disabled={isProcessing}
+                    title="The second unanswered question becomes a FINDING in the scorecard."
+                    className="max-w-[16rem] rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-1.5 text-left text-amber-200 transition-colors hover:border-amber-400/50 disabled:opacity-40"
+                  >
+                    <span className="block text-[11px] font-medium leading-tight">I don’t know</span>
+                    <span className="block text-[9px] text-amber-500/70">second miss = finding</span>
+                  </button>
+                </div>
+                {forgeFindings.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-white/[0.06] pt-2">
+                    {forgeFindings.map((finding) => (
+                      <p key={finding} className="font-mono text-[9px] leading-relaxed text-amber-300/90">
+                        {finding}
+                      </p>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

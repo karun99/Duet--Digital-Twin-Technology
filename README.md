@@ -30,6 +30,15 @@ reported as unknown. The command runs beside EMOJA and JATAKA, so tone and
 safety checks still apply. Type `/forge exit` to return to the persona's normal
 voice.
 
+Fetching is best-effort and tries three routes in order: Jina Reader, the
+AllOrigins CORS proxy, then the page directly. If all three fail the command
+still runs, but it is explicitly told not to fill the gap from memory.
+
+When a cast is detected, a picker appears above the composer with the page's
+people and roles. Pick one, or say **"I don't know."** A question that goes
+unanswered twice becomes a `FINDING` in the scorecard, and the interviewer stops
+re-asking it and moves on.
+
 > Duet started as a shared first project. The memory of building it is part of
 > what it is.
 
@@ -164,8 +173,9 @@ Design decisions worth knowing:
   Every provider surfaces typed errors (`LlmError`) with a retry path instead of
   failing silently.
 - **Local by default.** Keys, persona and conversation live in `localStorage`.
-  The only outbound calls are to your provider (and `r.jina.ai` if you paste a
-  link to read).
+  The only outbound calls are to your provider, plus a page reader when you
+  paste a link (`r.jina.ai`, falling back to `api.allorigins.win`, then the page
+  itself).
 - **Compiled CSS.** Tailwind is built at compile time — no CDN, no runtime
   style generation.
 

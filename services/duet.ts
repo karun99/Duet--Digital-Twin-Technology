@@ -235,17 +235,20 @@ export const searchUserBio = async (name: string): Promise<SearchResult> => {
   return { bio: cleanBio(bio), sources: [] };
 };
 
-async function readLinkText(url: string, timeoutMs = 15000): Promise<string | null> {
+async function fetchText(
+  target: string,
+  timeoutMs: number,
+  headers: Record<string, string> = {}
+): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`https://r.jina.ai/${url}`, {
-      headers: { Accept: 'text/plain' },
+    const response = await fetch(target, {
+      headers: { Accept: 'text/plain, text/html;q=0.9, */*;q=0.8', ...headers },
       signal: controller.signal,
     });
     if (!response.ok) return null;
-    const text = (await response.text()).trim();
-    return text.length > 60 ? text : null;
+    return (await response.text()).trim();
   } catch {
     return null;
   } finally {
@@ -253,11 +256,63 @@ async function readLinkText(url: string, timeoutMs = 15000): Promise<string | nu
   }
 }
 
+/** Crude but dependency-free HTML → text so proxy fallbacks still yield a source. */
+function htmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<\/(?:p|div|section|article|li|h[1-6]|tr|header|footer|nav|main)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '\n- ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function looksLikeHtml(value: string): boolean {
+  return /<(?:html|body|main|div|p|h[1-6]|article|section|li)\b/i.test(value);
+}
+
+/**
+ * Read a page as text. Three routes are tried in order because any single
+ * reader can rate-limit or refuse a host: Jina Reader → a CORS proxy → the
+ * page itself (works when the site sends CORS headers).
+ */
+async function readLinkText(
+  url: string,
+  timeoutMs = 15000
+): Promise<{ text: string; via: 'jina' | 'proxy' | 'direct' } | null> {
+  const routes: Array<{ url: string; via: 'jina' | 'proxy' | 'direct' }> = [
+    { url: `https://r.jina.ai/${url}`, via: 'jina' },
+    { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, via: 'proxy' },
+    { url, via: 'direct' },
+  ];
+
+  for (const route of routes) {
+    const raw = await fetchText(route.url, timeoutMs);
+    if (!raw) continue;
+    const text = looksLikeHtml(raw) ? htmlToText(raw) : raw;
+    if (text.length < 60) continue;
+    return { text, via: route.via };
+  }
+  return null;
+}
+
 export interface SourceDocument {
   url: string;
   title: string;
   text: string;
-  via: 'jina' | 'none';
+  via: 'jina' | 'proxy' | 'direct' | 'none';
+  error?: string;
 }
 
 /**
@@ -266,13 +321,24 @@ export interface SourceDocument {
  * gap from memory.
  */
 export async function fetchSourceDocument(url: string): Promise<SourceDocument> {
-  const raw = await readLinkText(url, 22000);
-  if (!raw) return { url, title: url, text: '', via: 'none' };
-  const { title } = summarizeText(raw, url);
+  const result = await readLinkText(url, 18000);
+  if (!result) {
+    return {
+      url,
+      title: url,
+      text: '',
+      via: 'none',
+      error: 'No reader route returned text. The page may block automated readers or the network may be rate-limited.',
+    };
+  }
+  const { title } = summarizeText(result.text, url);
   // The page is untrusted data: escape protocol-tag brackets so a page cannot
   // forge [[RESPONSE]] or [[GOVERNOR]] sections in the prompt.
-  const text = raw.slice(0, 16000).replace(/\[\[/g, '[ [').replace(/\]\]/g, '] ]');
-  return { url, title, text, via: 'jina' };
+  const text = result.text
+    .slice(0, 24000)
+    .replace(/\[\[/g, '[ [')
+    .replace(/\]\]/g, '] ]');
+  return { url, title, text, via: result.via };
 }
 
 function summarizeText(raw: string, url: string): { title: string; summary: string } {
@@ -298,8 +364,8 @@ function summarizeText(raw: string, url: string): { title: string; summary: stri
 }
 
 export const fetchLinkContent = async (url: string): Promise<{ title: string; summary: string }> => {
-  const readerText = await readLinkText(url);
-  if (readerText) return summarizeText(readerText, url);
+  const reader = await readLinkText(url);
+  if (reader) return summarizeText(reader.text, url);
 
   const content = await complete(
     [
